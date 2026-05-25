@@ -19,7 +19,7 @@ enum GetLogsResponse {
     Ok(Json<Vec<LogEntry::Model>>),
 }
 
-#[derive(Object)]
+#[derive(Object, Debug)]
 struct GetLogsRequest {
     before: Option<OffsetDateTime>,
     after: Option<OffsetDateTime>,

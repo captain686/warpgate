@@ -529,6 +529,20 @@ ADMIN_API_TEST_CASES: list[AdminApiTestCase] = [
         expected_statuses={201},
     ),
     AdminApiTestCase(
+        id="issue_public_key_credential",
+        permission="users_edit",
+        call=lambda api, r: api.issue_public_key_credential_with_http_info(
+            r["user_id"],
+            sdk.IssuePublicKeyCredentialRequest(
+                label="issued-key",
+                algorithm=sdk.IssuedPublicKeyAlgorithm.ED25519,
+                valid_for_seconds=3600,
+                max_uses=3,
+            )
+        ),
+        expected_statuses={201},
+    ),
+    AdminApiTestCase(
         id="update_public_key_credential",
         permission="users_edit",
         call=lambda api, r: api.update_public_key_credential_with_http_info(
@@ -546,6 +560,15 @@ ADMIN_API_TEST_CASES: list[AdminApiTestCase] = [
         permission="users_edit",
         call=lambda api, r: api.delete_public_key_credential_with_http_info(
             r["user_id"], r["public_key_id"]
+        ),
+        expected_statuses={204},
+    ),
+    AdminApiTestCase(
+        id="revoke_public_key_credential",
+        permission="users_edit",
+        call=lambda api, r: api.revoke_public_key_credential_with_http_info(
+            r["user_id"],
+            r["issued_public_key_id"],
         ),
         expected_statuses={204},
     ),
@@ -947,6 +970,16 @@ def test_all_openapi_admin_operations_permission_enforcement(
         ),
     )
     resources["public_key_id"] = public_key.id
+    issued = admin_client.issue_public_key_credential(
+        resources["user_id"],
+        sdk.IssuePublicKeyCredentialRequest(
+            label="issued-key-for-revoke",
+            algorithm=sdk.IssuedPublicKeyAlgorithm.ED25519,
+            valid_for_seconds=3600,
+            max_uses=5,
+        )
+    )
+    resources["issued_public_key_id"] = issued.credential.id
     otp = admin_client.create_otp_credential(
         resources["user_id"], sdk.NewOtpCredential(name="otp-1", secret_key=[1, 2, 3])
     )
@@ -1016,3 +1049,4 @@ def test_all_openapi_admin_operations_permission_enforcement(
                 assert status in {401, 403}, (
                     f"{case.id} should be forbidden without {case.permission}, got {status}: {body}"
                 )
+
