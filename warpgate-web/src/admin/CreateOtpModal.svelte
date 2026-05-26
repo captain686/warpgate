@@ -15,17 +15,24 @@
     import Fa from 'svelte-fa'
     import { faRefresh } from '@fortawesome/free-solid-svg-icons'
     import CopyButton from 'common/CopyButton.svelte'
+    import Alert from 'common/sveltestrap-s5-ports/Alert.svelte'
 
     interface Props {
         isOpen: boolean
         username: string
-        create: (secretKey: number[]) => void
+        create: (secretKey: number[], targetId?: string) => Promise<void> | void
+        sshTargets?: Array<{ id: string, name: string }>
+        defaultTargetId?: string
+        allowGlobalTargetScope?: boolean
     }
 
     let {
         isOpen = $bindable(true),
         username,
         create,
+        sshTargets = [],
+        defaultTargetId = '',
+        allowGlobalTargetScope = true,
     }: Props = $props()
     let secretKey: number[] = $state([])
     let qrImage: HTMLImageElement|undefined = $state()
@@ -35,6 +42,14 @@
     let validated = $state(false)
     let totpValid = $state(false)
     let validationFeedback = $state<string|undefined>()
+    let targetId = $state('')
+    let errorText: string | undefined = $state()
+
+    $effect(() => {
+        if (isOpen) {
+            targetId = defaultTargetId ?? ''
+        }
+    })
 
     const totp = $state(new OTPAuth.TOTP({
         issuer: 'Warpgate',
@@ -94,12 +109,17 @@
         _validate()
     })
 
-    function _save () {
+    async function _save () {
         if (!secretKey) {
             return
         }
-        isOpen = false
-        create(secretKey)
+        errorText = undefined
+        try {
+            await create(secretKey, targetId || undefined)
+            isOpen = false
+        } catch (error) {
+            errorText = error instanceof Error ? error.message : 'Failed to create OTP credential'
+        }
     }
 
     function _cancel () {
@@ -109,11 +129,28 @@
 
 <Modal toggle={_cancel} isOpen={isOpen} on:open={() => field?.focus()}>
     <Form {validated} on:submit={e => {
-        _save()
+        void _save()
         e.preventDefault()
     }}>
         <ModalBody>
             <img class="qr mb-3" bind:this={qrImage} alt="OTP QR code" />
+
+            {#if sshTargets.length > 0}
+                <FormGroup floating label="Scope target (optional)" class="mb-3">
+                    <select bind:value={targetId} class="form-control">
+                        {#if allowGlobalTargetScope}
+                            <option value="">All SSH targets</option>
+                        {/if}
+                        {#each sshTargets as target (target.id)}
+                            <option value={target.id}>{target.name}</option>
+                        {/each}
+                    </select>
+                </FormGroup>
+            {/if}
+
+            {#if errorText}
+                <Alert color="danger" fade={false}>{errorText}</Alert>
+            {/if}
 
             <div class="d-flex justify-content-center mb-4">
                 <Button class="d-flex align-items-center me-3" on:click={generateNewTotpKey}>

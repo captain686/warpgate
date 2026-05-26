@@ -56,6 +56,7 @@ pub struct AdminPermissions {
     users_create: bool,
     users_edit: bool,
     users_delete: bool,
+    users_manage_admins: bool,
 
     access_roles_create: bool,
     access_roles_edit: bool,
@@ -220,6 +221,7 @@ impl Api {
                             combined.users_create |= r.users_create;
                             combined.users_edit |= r.users_edit;
                             combined.users_delete |= r.users_delete;
+                            combined.users_manage_admins |= r.users_manage_admins;
                             combined.access_roles_create |= r.access_roles_create;
                             combined.access_roles_edit |= r.access_roles_edit;
                             combined.access_roles_delete |= r.access_roles_delete;

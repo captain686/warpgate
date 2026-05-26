@@ -1,6 +1,10 @@
 <script lang="ts">
-    import { serverInfo } from 'gateway/lib/store'
-    import NavListItem from 'common/NavListItem.svelte'
+import { getContext } from 'svelte'
+import { serverInfo } from 'gateway/lib/store'
+import NavListItem from 'common/NavListItem.svelte'
+
+    const getRoutePrefix = getContext<() => string>('warpgate.gatewayRoutePrefix') ?? (() => '')
+    const prefixedRoute = (path: string) => `${getRoutePrefix()}${path}`
 </script>
 
 <div class="page-summary-bar">
@@ -10,7 +14,7 @@
 <NavListItem
     title="API tokens"
     description="Manage your API tokens"
-    href="/profile/api-tokens"
+    href={prefixedRoute('/profile/api-tokens')}
 />
 
 {#if $serverInfo}
@@ -18,7 +22,7 @@
         <NavListItem
             title="Credentials"
             description="Manage your passwords and keys"
-            href="/profile/credentials"
+            href={prefixedRoute('/profile/credentials')}
         />
     {/if}
 {/if}
@@ -27,6 +31,6 @@
     <NavListItem
         title="Ticket requests"
         description="Request and manage self-service access tickets"
-        href="/ticket-requests"
+        href={prefixedRoute('/ticket-requests')}
     />
 {/if}

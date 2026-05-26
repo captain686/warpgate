@@ -13,14 +13,18 @@
     let hasSsoProviders = $state(false)
     const initPromise = init()
 
-    let durationText = $state('')
+    let ticketDurationText = $state('')
+    let logMaxAgeText = $state('')
 
     async function init () {
         parameters = await api.getParameters({})
         const ssoProviders = await gatewayApi.getSsoProviders()
         hasSsoProviders = ssoProviders.length > 0
-        durationText = parameters.ticketMaxDurationSeconds
+        ticketDurationText = parameters.ticketMaxDurationSeconds
             ? formatDurationAsHumantime(parameters.ticketMaxDurationSeconds)
+            : ''
+        logMaxAgeText = parameters.logMaxAgeSeconds
+            ? formatDurationAsHumantime(parameters.logMaxAgeSeconds)
             : ''
     }
 
@@ -32,8 +36,24 @@
     }
 
     function onDurationChange () {
-        const seconds = parseHumantimeDuration(durationText)
+        const seconds = parseHumantimeDuration(ticketDurationText)
         parameters!.ticketMaxDurationSeconds = seconds ?? undefined
+        update()
+    }
+
+    function onLogMaxAgeChange () {
+        const trimmed = logMaxAgeText.trim()
+        if (!trimmed) {
+            parameters!.logMaxAgeSeconds = null as any
+            update()
+            return
+        }
+
+        const seconds = parseHumantimeDuration(trimmed)
+        if (seconds === undefined) {
+            return
+        }
+        parameters!.logMaxAgeSeconds = seconds
         update()
     }
 </script>
@@ -217,7 +237,7 @@
                     type="text"
                     class="form-control"
                     placeholder="e.g. 8h, 30m, 1d"
-                    bind:value={durationText}
+                    bind:value={ticketDurationText}
                     onchange={onDurationChange}
                 />
                 <small class="form-text text-muted">
@@ -272,6 +292,24 @@
                     <option value="max_size">Maximum size</option>
                 </select>
             </FormGroup>
+
+            {#if parameters.logRetentionStrategy === 'max_age'}
+            <FormGroup floating label="Max log age (blank = config default)">
+                <input
+                    type="text"
+                    class="form-control"
+                    placeholder="e.g. 7d, 24h, 30d"
+                    bind:value={logMaxAgeText}
+                    onchange={onLogMaxAgeChange}
+                />
+                <small class="form-text text-muted">
+                    Applies to non-audit logs. Audit log retention still follows the config file.
+                </small>
+            </FormGroup>
+            <InfoBox class="mt-3 mb-3">
+                Non-audit logs older than the configured age are pruned by the periodic cleanup task.
+            </InfoBox>
+            {/if}
 
             {#if parameters.logRetentionStrategy === 'max_size'}
             <FormGroup floating label="Max log size (MiB)">

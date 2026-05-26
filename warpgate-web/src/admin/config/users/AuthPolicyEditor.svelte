@@ -30,6 +30,15 @@ const labels = {
     WebUserApproval: 'In-browser auth',
 }
 
+const credentialOrder: CredentialKind[] = [
+    CredentialKind.Password,
+    CredentialKind.PublicKey,
+    CredentialKind.Totp,
+    CredentialKind.Sso,
+    CredentialKind.WebUserApproval,
+    CredentialKind.Certificate,
+]
+
 const tips: Record<ProtocolID, Map<[CredentialKind, boolean], string>> = {
     postgres: new Map([
         [
@@ -64,6 +73,10 @@ const validCredentials = $derived.by(() => {
     return vc
 })
 
+const displayCredentials = $derived(
+    credentialOrder.filter(type => possibleCredentials.has(type))
+)
+
 let isAny = $derived(!value[protocolId])
 
 function updateAny () {
@@ -71,7 +84,7 @@ function updateAny () {
         value[protocolId] = undefined
     } else {
         value[protocolId] = []
-        let oneCred = Array.from(validCredentials).find(x => possibleCredentials.has(x))
+        let oneCred = displayCredentials.find(x => validCredentials.has(x))
         if (oneCred) {
             value[protocolId] = [oneCred]
         }
@@ -79,6 +92,9 @@ function updateAny () {
 }
 
 function toggle (type: CredentialKind) {
+    if (!validCredentials.has(type)) {
+        return
+    }
     if (value[protocolId]!.includes(type)) {
         value[protocolId] = value[protocolId]!.filter((x: CredentialKind) => x !== type)
     } else {
@@ -96,16 +112,16 @@ function toggle (type: CredentialKind) {
         on:change={updateAny}
     />
     {#if !isAny}
-        {#each [...validCredentials] as type (type)}
-            {#if possibleCredentials.has(type)}
-                <Input
-                    id={'policy-editor-' + protocolId + type}
-                    type="switch"
-                    checked={value[protocolId]?.includes(type)}
-                    label={labels[type]}
-                    on:change={() => toggle(type)}
-                />
-            {/if}
+        {#each displayCredentials as type (type)}
+            <Input
+                id={'policy-editor-' + protocolId + type}
+                type="switch"
+                checked={value[protocolId]?.includes(type)}
+                label={labels[type]}
+                disabled={!validCredentials.has(type)}
+                title={!validCredentials.has(type) ? 'Add this credential first' : ''}
+                on:change={() => toggle(type)}
+            />
         {/each}
     {/if}
 </div>

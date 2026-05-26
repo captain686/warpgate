@@ -30,6 +30,7 @@ pub trait ConfigProvider {
         &mut self,
         username: &str,
         client_credential: &AuthCredential,
+        target_name: Option<&str>,
     ) -> Result<bool, WarpgateError>;
 
     async fn username_for_sso_credential(
@@ -70,6 +71,7 @@ pub trait ConfigProvider {
         &self,
         username: &str,
         credential: Option<AuthCredential>,
+        target_name: Option<&str>,
     ) -> Result<(), WarpgateError>;
 
     async fn validate_api_token(&mut self, token: &str) -> Result<Option<User>, WarpgateError>;

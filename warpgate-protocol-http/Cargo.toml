@@ -39,4 +39,5 @@ percent-encoding = { version = "2.1", default-features = false }
 subtle = "2"
 uuid.workspace = true
 regex.workspace = true
+russh.workspace = true
 url.workspace = true

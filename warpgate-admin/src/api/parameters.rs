@@ -57,6 +57,7 @@ struct ParameterValues {
     pub ticket_request_show_all_targets: bool,
     pub show_session_menu: bool,
     pub log_retention_strategy: LogRetentionStrategy,
+    pub log_max_age_seconds: Option<i64>,
     pub log_max_size_megabytes: Option<i64>,
 }
 
@@ -77,6 +78,7 @@ struct ParameterUpdate {
     pub ticket_request_show_all_targets: Option<bool>,
     pub show_session_menu: Option<bool>,
     pub log_retention_strategy: Option<LogRetentionStrategy>,
+    pub log_max_age_seconds: Option<Option<i64>>,
     pub log_max_size_megabytes: Option<Option<i64>>,
 }
 
@@ -121,6 +123,7 @@ impl Api {
             ticket_request_show_all_targets: parameters.ticket_request_show_all_targets,
             show_session_menu: parameters.show_session_menu,
             log_retention_strategy: parameters.log_retention_strategy.into(),
+            log_max_age_seconds: parameters.log_max_age_seconds,
             log_max_size_megabytes: parameters.log_max_size_megabytes,
         })))
     }
@@ -167,6 +170,7 @@ impl Api {
             .log_retention_strategy
             .map(String::from)
             .map_or(NotSet, Set);
+        parameters.log_max_age_seconds = body.log_max_age_seconds.map_or(NotSet, Set);
         parameters.log_max_size_megabytes = body.log_max_size_megabytes.map_or(NotSet, Set);
 
         Parameters::Entity::update(parameters).exec(&*db).await?;

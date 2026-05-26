@@ -27,6 +27,8 @@ pub struct Model {
     pub show_session_menu: bool,
     /// Global log retention strategy. Supported values: `max_age`, `max_size`.
     pub log_retention_strategy: String,
+    /// Maximum age of non-audit logs in seconds when `log_retention_strategy = max_age`.
+    pub log_max_age_seconds: Option<i64>,
     /// Maximum total size of non-audit logs in MiB when `log_retention_strategy = max_size`.
     pub log_max_size_megabytes: Option<i64>,
 }
@@ -60,6 +62,7 @@ impl Entity {
                     ticket_request_show_all_targets: Set(false),
                     show_session_menu: Set(true),
                     log_retention_strategy: Set("max_age".to_owned()),
+                    log_max_age_seconds: Set(None),
                     log_max_size_megabytes: Set(None),
                 }
                 .insert(db)

@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use data_encoding::BASE64;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, ModelTrait, QueryFilter,
-    QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, ModelTrait,
+    QueryFilter, QueryOrder, Set,
 };
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
@@ -18,7 +18,7 @@ use warpgate_common::helpers::hash::verify_password_hash;
 use warpgate_common::helpers::otp::verify_totp;
 use warpgate_common::{
     Role, Target, User, UserAuthCredential, UserPasswordCredential, UserPublicKeyCredential,
-    UserRequireCredentialsPolicy, UserSsoCredential, UserTotpCredential, WarpgateError,
+    UserRequireCredentialsPolicy, UserSsoCredential, WarpgateError,
 };
 use warpgate_db_entities as entities;
 use warpgate_sso::SsoProviderConfig;
@@ -92,6 +92,7 @@ impl DatabaseConfigProvider {
                 entities::PublicKeyCredential::ActiveModel {
                     id: Set(Uuid::new_v4()),
                     user_id: Set(user_id),
+                    target_id: Set(None),
                     date_added: Set(Some(OffsetDateTime::now_utc())),
                     last_used: Set(None),
                     label: Set("Public key synchronized from LDAP".to_string()),
@@ -421,6 +422,7 @@ impl ConfigProvider for DatabaseConfigProvider {
         &mut self,
         username: &str,
         client_credential: &AuthCredential,
+        target_name: Option<&str>,
     ) -> Result<bool, WarpgateError> {
         let db = self.db.lock().await;
 
@@ -434,6 +436,20 @@ impl ConfigProvider for DatabaseConfigProvider {
             return Ok(false);
         };
         let user_id = user_model.id;
+
+        let scoped_target_id = if let Some(target_name) = target_name {
+            let target_model = entities::Target::Entity::find()
+                .filter(entities::Target::Column::Name.eq(target_name))
+                .one(&*db)
+                .await?;
+            let Some(target_model) = target_model else {
+                warn!("Selected target not found while validating credentials: {target_name}");
+                return Ok(false);
+            };
+            Some(target_model.id)
+        } else {
+            None
+        };
 
         // Sync SSH keys from LDAP if user is linked
         if matches!(client_credential, AuthCredential::PublicKey { .. })
@@ -462,14 +478,24 @@ impl ConfigProvider for DatabaseConfigProvider {
                     username = &user_details.username[..],
                     "Client key: {}", openssh_public_key
                 );
-                let credential = entities::PublicKeyCredential::Entity::find()
+                let mut query = entities::PublicKeyCredential::Entity::find()
                     .filter(entities::PublicKeyCredential::Column::UserId.eq(user_id))
                     .filter(
                         entities::PublicKeyCredential::Column::OpensshPublicKey
                             .eq(openssh_public_key),
+                    );
+
+                query = if let Some(target_id) = scoped_target_id {
+                    query.filter(
+                        Condition::any()
+                            .add(entities::PublicKeyCredential::Column::TargetId.is_null())
+                            .add(entities::PublicKeyCredential::Column::TargetId.eq(target_id)),
                     )
-                    .one(&*db)
-                    .await?;
+                } else {
+                    query.filter(entities::PublicKeyCredential::Column::TargetId.is_null())
+                };
+
+                let credential = query.one(&*db).await?;
 
                 let Some(credential) = credential else {
                     return Ok(false);
@@ -513,15 +539,26 @@ impl ConfigProvider for DatabaseConfigProvider {
                     }))
             }
             AuthCredential::Otp(client_otp) => {
-                Ok(user_details
-                    .credentials
-                    .iter()
-                    .any(|credential| match credential {
-                        UserAuthCredential::Totp(UserTotpCredential { key: user_otp_key }) => {
-                            verify_totp(client_otp.expose_secret(), user_otp_key)
-                        }
-                        _ => false,
-                    }))
+                let mut query = entities::OtpCredential::Entity::find()
+                    .filter(entities::OtpCredential::Column::UserId.eq(user_id));
+
+                query = if let Some(target_id) = scoped_target_id {
+                    query.filter(
+                        Condition::any()
+                            .add(entities::OtpCredential::Column::TargetId.is_null())
+                            .add(entities::OtpCredential::Column::TargetId.eq(target_id)),
+                    )
+                } else {
+                    query.filter(entities::OtpCredential::Column::TargetId.is_null())
+                };
+
+                let otp_credentials = query.all(&*db).await?;
+                Ok(otp_credentials.iter().any(|credential| {
+                    verify_totp(
+                        client_otp.expose_secret(),
+                        &warpgate_common::Secret::new(credential.secret_key.clone()),
+                    )
+                }))
             }
             AuthCredential::Sso {
                 provider: client_provider,
@@ -723,6 +760,7 @@ impl ConfigProvider for DatabaseConfigProvider {
         &self,
         username: &str,
         credential: Option<AuthCredential>,
+        target_name: Option<&str>,
     ) -> Result<(), WarpgateError> {
         let db = self.db.lock().await;
 
@@ -746,12 +784,33 @@ impl ConfigProvider for DatabaseConfigProvider {
             return Ok(());
         };
 
+        let scoped_target_id = if let Some(target_name) = target_name {
+            let target_model = entities::Target::Entity::find()
+                .filter(entities::Target::Column::Name.eq(target_name))
+                .one(&*db)
+                .await?;
+            let Some(target_model) = target_model else {
+                warn!("Cannot update key usage for unknown target: {target_name}");
+                return Ok(());
+            };
+            Some(target_model.id)
+        } else {
+            None
+        };
+
         let public_key_credential = entities::PublicKeyCredential::Entity::find()
             .filter(entities::PublicKeyCredential::Column::UserId.eq(user_model.id))
             .filter(
                 entities::PublicKeyCredential::Column::OpensshPublicKey
                     .eq(openssh_public_key.clone()),
             )
+            .filter(if let Some(target_id) = scoped_target_id {
+                Condition::any()
+                    .add(entities::PublicKeyCredential::Column::TargetId.is_null())
+                    .add(entities::PublicKeyCredential::Column::TargetId.eq(target_id))
+            } else {
+                Condition::all().add(entities::PublicKeyCredential::Column::TargetId.is_null())
+            })
             .one(&*db)
             .await?;
 

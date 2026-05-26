@@ -98,3 +98,110 @@ class Test:
                 timeout=float(timeout),
                 otp_code="12345678",
             )
+
+    def test_target_scoped_otp(
+        self,
+        processes: ProcessManager,
+        wg_c_ed25519_pubkey: Path,
+        otp_key_base32: str,
+        otp_key_base64: str,
+        timeout,
+        shared_wg: WarpgateProcess,
+    ):
+        ssh_port = processes.start_ssh_server(
+            trusted_keys=[wg_c_ed25519_pubkey.read_text()]
+        )
+        wait_port(ssh_port)
+
+        url = f"https://localhost:{shared_wg.http_port}"
+        with admin_client(url) as api:
+            role = api.create_role(
+                sdk.RoleDataRequest(name=f"role-{uuid4()}"),
+            )
+            user = api.create_user(sdk.CreateUserRequest(username=f"user-{uuid4()}"))
+            api.create_public_key_credential(
+                user.id,
+                sdk.NewPublicKeyCredential(
+                    label="Public Key",
+                    openssh_public_key=open("ssh-keys/id_ed25519.pub").read().strip(),
+                ),
+            )
+            target_a = api.create_target(
+                sdk.TargetDataRequest(
+                    name=f"ssh-a-{uuid4()}",
+                    options=sdk.TargetOptions(
+                        sdk.TargetOptionsTargetSSHOptions(
+                            kind="Ssh",
+                            host="localhost",
+                            port=ssh_port,
+                            username=processes.ssh_target_username,
+                            auth=sdk.SSHTargetAuth(
+                                sdk.SSHTargetAuthSshTargetPublicKeyAuth(
+                                    kind="PublicKey"
+                                )
+                            ),
+                        )
+                    ),
+                )
+            )
+            target_b = api.create_target(
+                sdk.TargetDataRequest(
+                    name=f"ssh-b-{uuid4()}",
+                    options=sdk.TargetOptions(
+                        sdk.TargetOptionsTargetSSHOptions(
+                            kind="Ssh",
+                            host="localhost",
+                            port=ssh_port,
+                            username=processes.ssh_target_username,
+                            auth=sdk.SSHTargetAuth(
+                                sdk.SSHTargetAuthSshTargetPublicKeyAuth(
+                                    kind="PublicKey"
+                                )
+                            ),
+                        )
+                    ),
+                )
+            )
+            api.create_otp_credential(
+                user.id,
+                {
+                    "secret_key": list(b64decode(otp_key_base64)),
+                    "target_id": target_a.id,
+                },
+            )
+            api.update_user(
+                user.id,
+                sdk.UserDataRequest(
+                    username=user.username,
+                    credential_policy=sdk.UserRequireCredentialsPolicy(
+                        ssh=["PublicKey", "Totp"],
+                    ),
+                ),
+            )
+            api.add_user_role(user.id, role.id)
+            api.add_target_role(target_a.id, role.id)
+            api.add_target_role(target_b.id, role.id)
+
+        totp = pyotp.TOTP(otp_key_base32)
+        status, stdout, _stderr = ssh_exec_command_with_public_key(
+            "localhost",
+            shared_wg.ssh_port,
+            f"{user.username}:{target_a.name}",
+            "ssh-keys/id_ed25519",
+            "ls /bin/sh",
+            timeout=float(timeout),
+            otp_code=totp.now(),
+        )
+        assert status == 0
+        assert stdout == b"/bin/sh\n"
+
+        with pytest.raises(paramiko.AuthenticationException):
+            ssh_exec_command_with_public_key(
+                "localhost",
+                shared_wg.ssh_port,
+                f"{user.username}:{target_b.name}",
+                "ssh-keys/id_ed25519",
+                "ls /bin/sh",
+                timeout=float(timeout),
+                otp_code=totp.now(),
+            )

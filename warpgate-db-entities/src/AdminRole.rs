@@ -23,6 +23,7 @@ pub struct Model {
     pub users_create: bool,
     pub users_edit: bool,
     pub users_delete: bool,
+    pub users_manage_admins: bool,
 
     pub access_roles_create: bool,
     pub access_roles_edit: bool,
@@ -78,6 +79,7 @@ impl From<Model> for warpgate_common::AdminRole {
             users_create: model.users_create,
             users_edit: model.users_edit,
             users_delete: model.users_delete,
+            users_manage_admins: model.users_manage_admins,
             access_roles_create: model.access_roles_create,
             access_roles_edit: model.access_roles_edit,
             access_roles_delete: model.access_roles_delete,

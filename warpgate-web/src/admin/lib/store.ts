@@ -8,6 +8,7 @@ export interface AdminPermissionDef {
     category?: string
     deps?: string[]
     dangerous?: boolean
+    dangerHint?: string
 }
 
 export const ADMIN_PERMISSIONS = [
@@ -42,6 +43,14 @@ export const ADMIN_PERMISSIONS = [
         key: 'usersDelete' as const, label: 'Delete',
         category: 'Users' as const,
         deps: ['usersCreate', 'usersEdit'],
+    },
+    {
+        key: 'usersManageAdmins' as const,
+        label: 'Manage administrator accounts',
+        category: 'Users' as const,
+        deps: ['usersEdit'],
+        dangerous: true,
+        dangerHint: 'Allows editing/deleting admin accounts and changing their credentials/roles.',
     },
     {
         key: 'accessRolesCreate' as const,
@@ -102,7 +111,10 @@ export const ADMIN_PERMISSIONS = [
     {
         key: 'adminRolesManage' as const,
         label: 'Manage admin roles',
-        category: 'Configuration', dangerous: true } as const,
+        category: 'Configuration',
+        dangerous: true,
+        dangerHint: 'Grants the ability to create, edit, and delete admin roles.',
+    } as const,
 ]
 
 // eslint-disable-next-line @typescript-eslint/no-type-alias

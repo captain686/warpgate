@@ -14,7 +14,7 @@ use warpgate_core::logging::{AuditEvent, CredentialChangedVia};
 use warpgate_db_entities::{CertificateCredential, CertificateRevocation, Parameters, User};
 
 use super::AnySecurityScheme;
-use crate::api::common::require_admin_permission;
+use crate::api::common::{require_admin_permission, require_manage_admin_accounts_permission};
 
 fn certificate_fingerprint(certificate_pem: &str) -> Result<String, WarpgateError> {
     Ok(warpgate_ca::certificate_sha256_hex_fingerprint(
@@ -125,6 +125,7 @@ impl ListApi {
         _auth: AnySecurityScheme,
     ) -> Result<IssueCertificateCredentialResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::UsersEdit)).await?;
+        require_manage_admin_accounts_permission(&ctx, *user_id).await?;
 
         let db = ctx.services().db.lock().await;
         let params = Parameters::Entity::get(&db).await?;
@@ -198,6 +199,7 @@ impl DetailApi {
         _auth: AnySecurityScheme,
     ) -> Result<UpdateCertificateCredentialResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::UsersEdit)).await?;
+        require_manage_admin_accounts_permission(&ctx, *user_id).await?;
 
         let db = ctx.services().db.lock().await;
         let Some(cred) = CertificateCredential::Entity::find_by_id(id.0)
@@ -231,6 +233,7 @@ impl DetailApi {
         _auth: AnySecurityScheme,
     ) -> Result<RevokeCertificateCredentialResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::UsersEdit)).await?;
+        require_manage_admin_accounts_permission(&ctx, *user_id).await?;
 
         let db = ctx.services().db.lock().await;
 

@@ -10,7 +10,7 @@ use warpgate_core::logging::{AuditEvent, CredentialChangedVia};
 use warpgate_db_entities::{SsoCredential, User};
 
 use super::AnySecurityScheme;
-use crate::api::common::require_admin_permission;
+use crate::api::common::{require_admin_permission, require_manage_admin_accounts_permission};
 
 #[derive(Object)]
 struct ExistingSsoCredential {
@@ -108,6 +108,7 @@ impl ListApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<CreateSsoCredentialResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::UsersEdit)).await?;
+        require_manage_admin_accounts_permission(&ctx, *user_id).await?;
 
         let db = ctx.services().db.lock().await;
 
@@ -165,6 +166,7 @@ impl DetailApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<UpdateSsoCredentialResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::UsersEdit)).await?;
+        require_manage_admin_accounts_permission(&ctx, *user_id).await?;
 
         let db = ctx.services().db.lock().await;
 
@@ -196,6 +198,7 @@ impl DetailApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<DeleteCredentialResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::UsersEdit)).await?;
+        require_manage_admin_accounts_permission(&ctx, *user_id).await?;
 
         let db = ctx.services().db.lock().await;
 

@@ -71,7 +71,7 @@
     {#if options.auth.kind === 'PublicKey'}
         <a
             class="btn btn-link mb-3 d-flex align-items-center"
-            href="/@warpgate/admin#/config/ssh"
+            href="/@warpgate#/config/ssh"
             target="_blank">
             <Fa fw icon={faExternalLink} />
         </a>

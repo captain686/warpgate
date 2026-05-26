@@ -4,6 +4,7 @@ use sea_orm::{
     ColumnTrait, Condition, EntityTrait, JoinType, PaginatorTrait, QueryFilter, QuerySelect,
     RelationTrait,
 };
+use uuid::Uuid;
 use warpgate_common::{AdminPermission, WarpgateError};
 pub use warpgate_common_http::{RequestAuthorization, SessionAuthorization};
 use warpgate_db_entities::{AdminRole, User, UserAdminRoleAssignment};
@@ -53,6 +54,7 @@ pub async fn has_admin_permission(
             AdminPermission::UsersCreate => AdminRole::Column::UsersCreate.eq(true),
             AdminPermission::UsersEdit => AdminRole::Column::UsersEdit.eq(true),
             AdminPermission::UsersDelete => AdminRole::Column::UsersDelete.eq(true),
+            AdminPermission::UsersManageAdmins => AdminRole::Column::UsersManageAdmins.eq(true),
 
             AdminPermission::AccessRolesCreate => AdminRole::Column::AccessRolesCreate.eq(true),
             AdminPermission::AccessRolesEdit => AdminRole::Column::AccessRolesEdit.eq(true),
@@ -93,6 +95,26 @@ pub async fn require_admin_permission(
             None => WarpgateError::NoAdminAccess,
         })
     }
+}
+
+pub async fn require_manage_admin_accounts_permission(
+    ctx: &warpgate_common_http::AuthenticatedRequestContext,
+    user_id: Uuid,
+) -> Result<(), WarpgateError> {
+    let db = ctx.services().db.lock().await;
+    let target_is_admin = UserAdminRoleAssignment::Entity::find()
+        .filter(UserAdminRoleAssignment::Column::UserId.eq(user_id))
+        .count(&*db)
+        .await
+        .map_err(WarpgateError::from)?
+        > 0;
+    drop(db);
+
+    if target_is_admin {
+        require_admin_permission(ctx, Some(AdminPermission::UsersManageAdmins)).await?;
+    }
+
+    Ok(())
 }
 
 pub fn case_insensitive_search<C, I>(search: &str, columns: I) -> impl IntoCondition

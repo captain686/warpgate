@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { getContext } from 'svelte'
     import { get } from 'svelte/store'
     import { querystring, replace } from 'svelte-spa-router'
     import { Button, FormGroup } from '@sveltestrap/sveltestrap'
@@ -21,9 +22,11 @@
     let authState: ApiAuthState|undefined = $state()
     let ssoProvidersPromise = api.getSsoProviders()
     let showPasswordLogin = $state(false)
+    const getRoutePrefix = getContext<() => string>('warpgate.gatewayRoutePrefix') ?? (() => '')
 
-    const nextURL = new URLSearchParams(get(querystring)).get('next') ?? undefined
-    const serverErrorMessage = new URLSearchParams(location.search).get('login_error')
+    const urlQuery = get(querystring) ?? location.search
+    const nextURL = new URLSearchParams(urlQuery).get('next') ?? undefined
+    const serverErrorMessage = new URLSearchParams(urlQuery).get('login_error')
     const initPromise = init()
 
     async function init () {
@@ -45,7 +48,7 @@
         if (nextURL) {
             location.assign(nextURL)
         } else {
-            replace('/')
+            replace(`${getRoutePrefix()}/`)
         }
     }
 

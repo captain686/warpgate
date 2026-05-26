@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { setContext } from 'svelte'
     import { serverInfo, reloadServerInfo } from 'gateway/lib/store'
 
     import Router, { link, type WrappedComponent } from 'svelte-spa-router'
@@ -9,6 +10,8 @@
     import Brand from 'common/Brand.svelte'
     import Loadable from 'common/Loadable.svelte'
 
+    setContext('warpgate.profileHref', '/@warpgate#/gateway/profile')
+
     async function init () {
         await reloadServerInfo()
     }
@@ -18,6 +21,12 @@
     const routes: Record<string, WrappedComponent> = {
         '/': wrap({
             asyncComponent: () => import('./Home.svelte') as any,
+        }),
+        '/profile': wrap({
+            asyncComponent: () => import('common/RouteRedirect.svelte') as any,
+            props: {
+                to: '/gateway/profile',
+            },
         }),
         '/sessions/:id': wrap({
             asyncComponent: () => import('./Session.svelte') as any,
@@ -49,8 +58,18 @@
         '/config': wrap({
             asyncComponent: () => import('./config/Config.svelte') as any,
         }),
+        '/gateway': wrap({
+            asyncComponent: () => import('../gateway/App.svelte') as any,
+            props: {
+                routePrefix: '/gateway',
+                hideAdminButton: true,
+                brandHref: '/@warpgate#/gateway',
+                embedded: true,
+            },
+        }),
     }
     routes['/config/*'] = routes['/config']!
+    routes['/gateway/*'] = routes['/gateway']!
 </script>
 
 <Loadable promise={initPromise}>
@@ -63,6 +82,7 @@
                 <a use:link use:active href="/">Sessions</a>
                 <a use:link use:active href="/config">Config</a>
                 <a use:link use:active href="/log">Log</a>
+                <a use:link use:active href="/gateway" class="ms-2">Gateway</a>
             {/if}
             <span class="ms-3"></span>
             <div class="ms-auto">

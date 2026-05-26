@@ -7,16 +7,17 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, ModelTrait, QueryFilter,
     Set,
 };
+use serde::Deserialize;
 use time::OffsetDateTime;
 use uuid::Uuid;
 use warpgate_common::helpers::rng::get_crypto_rng;
 use warpgate_common::{AdminPermission, UserPublicKeyCredential, WarpgateError};
 use warpgate_common_http::AuthenticatedRequestContext;
 use warpgate_core::logging::{AuditEvent, CredentialChangedVia};
-use warpgate_db_entities::{PublicKeyCredential, User};
+use warpgate_db_entities::{PublicKeyCredential, Target, User};
 
 use super::AnySecurityScheme;
-use crate::api::common::require_admin_permission;
+use crate::api::common::{require_admin_permission, require_manage_admin_accounts_permission};
 
 async fn check_user_ldap_linked(
     db: &DatabaseConnection,
@@ -76,6 +77,7 @@ fn compute_expiry(valid_for_seconds: Option<i64>) -> Result<Option<OffsetDateTim
 struct ExistingPublicKeyCredential {
     id: Uuid,
     label: String,
+    target_id: Option<Uuid>,
     date_added: Option<OffsetDateTime>,
     last_used: Option<OffsetDateTime>,
     openssh_public_key: String,
@@ -92,17 +94,21 @@ struct NewPublicKeyCredential {
     openssh_public_key: String,
 }
 
-#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[derive(Enum, Deserialize, Copy, Clone, Eq, PartialEq)]
 enum IssuedPublicKeyAlgorithm {
     #[oai(rename = "ed25519")]
+    #[serde(rename = "ed25519")]
     Ed25519,
     #[oai(rename = "rsa_sha512")]
+    #[serde(rename = "rsa_sha512")]
     RsaSha512,
 }
 
-#[derive(Object)]
+#[derive(Object, Deserialize)]
 struct IssuePublicKeyCredentialRequest {
     label: String,
+    #[serde(alias = "targetId")]
+    target_id: Option<Uuid>,
     valid_for_seconds: Option<i64>,
     max_uses: Option<i64>,
     algorithm: Option<IssuedPublicKeyAlgorithm>,
@@ -139,6 +145,29 @@ fn generate_issued_keypair(
     Ok((public_key_openssh, private_key_openssh))
 }
 
+async fn validate_ssh_target(
+    db: &DatabaseConnection,
+    target_id: Option<Uuid>,
+) -> Result<Option<Uuid>, WarpgateError> {
+    let Some(target_id) = target_id else {
+        return Ok(None);
+    };
+
+    let Some(target) = Target::Entity::find_by_id(target_id).one(db).await? else {
+        return Err(WarpgateError::InvalidRequest(format!(
+            "target_id {target_id} not found"
+        )));
+    };
+
+    if target.kind != Target::TargetKind::Ssh {
+        return Err(WarpgateError::InvalidRequest(
+            "target_id must reference an SSH target".into(),
+        ));
+    }
+
+    Ok(Some(target.id))
+}
+
 impl From<PublicKeyCredential::Model> for ExistingPublicKeyCredential {
     fn from(credential: PublicKeyCredential::Model) -> Self {
         Self {
@@ -146,6 +175,7 @@ impl From<PublicKeyCredential::Model> for ExistingPublicKeyCredential {
             date_added: credential.date_added,
             last_used: credential.last_used,
             label: credential.label,
+            target_id: credential.target_id,
             openssh_public_key: credential.openssh_public_key,
             issued_by_warpgate: credential.issued_by_warpgate,
             expires_at: credential.expires_at,
@@ -243,6 +273,7 @@ impl ListApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<CreatePublicKeyCredentialResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::UsersEdit)).await?;
+        require_manage_admin_accounts_permission(&ctx, *user_id).await?;
 
         let db = ctx.services().db.lock().await;
 
@@ -259,6 +290,7 @@ impl ListApi {
         let object = PublicKeyCredential::ActiveModel {
             id: Set(Uuid::new_v4()),
             user_id: Set(*user_id),
+            target_id: Set(None),
             date_added: Set(Some(OffsetDateTime::now_utc())),
             last_used: Set(None),
             label: Set(body.label.clone()),
@@ -300,6 +332,7 @@ impl ListApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<IssuePublicKeyCredentialResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::UsersEdit)).await?;
+        require_manage_admin_accounts_permission(&ctx, *user_id).await?;
 
         let db = ctx.services().db.lock().await;
         let Some(user) = User::Entity::find_by_id(*user_id).one(&*db).await? else {
@@ -313,12 +346,14 @@ impl ListApi {
         let max_uses = parse_positive_option(body.max_uses, "max_uses")?;
         let expires_at = compute_expiry(body.valid_for_seconds)?;
         let uses_left = max_uses;
+        let target_id = validate_ssh_target(&db, body.target_id).await?;
         let algorithm = body.algorithm.unwrap_or(IssuedPublicKeyAlgorithm::Ed25519);
         let (openssh_public_key, private_key_openssh) = generate_issued_keypair(algorithm)?;
 
         let object = PublicKeyCredential::ActiveModel {
             id: Set(Uuid::new_v4()),
             user_id: Set(*user_id),
+            target_id: Set(target_id),
             date_added: Set(Some(OffsetDateTime::now_utc())),
             last_used: Set(None),
             label: Set(body.label.clone()),
@@ -389,6 +424,7 @@ impl DetailApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<UpdatePublicKeyCredentialResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::UsersEdit)).await?;
+        require_manage_admin_accounts_permission(&ctx, *user_id).await?;
 
         let db = ctx.services().db.lock().await;
         let Some(_) = User::Entity::find_by_id(*user_id).one(&*db).await? else {
@@ -442,6 +478,7 @@ impl DetailApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<DeleteCredentialResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::UsersEdit)).await?;
+        require_manage_admin_accounts_permission(&ctx, *user_id).await?;
 
         let db = ctx.services().db.lock().await;
 
@@ -490,6 +527,7 @@ impl DetailApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<RevokeCredentialResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::UsersEdit)).await?;
+        require_manage_admin_accounts_permission(&ctx, *user_id).await?;
 
         let db = ctx.services().db.lock().await;
 

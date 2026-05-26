@@ -170,7 +170,7 @@ impl Api {
 
         let password_cred = AuthCredential::Password(Secret::new(body.password.clone()));
         if cp
-            .validate_credential(&state.user_info().username, &password_cred)
+            .validate_credential(&state.user_info().username, &password_cred, None)
             .await?
         {
             state.add_valid_credential(password_cred);
@@ -216,7 +216,7 @@ impl Api {
 
         let otp_cred = AuthCredential::Otp(body.otp.clone().into());
         if cp
-            .validate_credential(&state.user_info().username, &otp_cred)
+            .validate_credential(&state.user_info().username, &otp_cred, None)
             .await?
         {
             state.add_valid_credential(otp_cred);

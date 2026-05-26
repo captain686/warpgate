@@ -1,15 +1,40 @@
 <script lang="ts">
     import { faCircle } from '@fortawesome/free-regular-svg-icons'
     import { faCircleCheck, faExternalLink } from '@fortawesome/free-solid-svg-icons'
-    import { ListGroup } from '@sveltestrap/sveltestrap'
+    import { Button, ListGroup } from '@sveltestrap/sveltestrap'
     import type { SetupState } from 'gateway/lib/api'
     import Fa from 'svelte-fa'
 
-    export let setupState: SetupState
+    interface Props {
+        setupState: SetupState
+    }
+
+    let { setupState }: Props = $props()
+
+    const dismissedStorageKey = 'warpgate:getting-started-dismissed'
+    let dismissed = $state(localStorage.getItem(dismissedStorageKey) === 'true')
+
+    function dismiss () {
+        dismissed = true
+        localStorage.setItem(dismissedStorageKey, 'true')
+    }
 </script>
 
+{#if !dismissed}
 <div class="getting-started-help border-secondary">
-    <h2>getting started</h2>
+    <div class="heading">
+        <h2>getting started</h2>
+        <Button
+            aria-label="Hide getting started"
+            class="dismiss"
+            color="link"
+            size="sm"
+            type="button"
+            on:click={dismiss}
+        >
+            <span aria-hidden="true">&times;</span>
+        </Button>
+    </div>
 
     <ListGroup flush>
         <!-- eslint-disable-next-line svelte/no-target-blank -->
@@ -21,7 +46,7 @@
             <Fa icon={faExternalLink} />
         </a>
 
-        <a href="/@warpgate/admin#/config/targets/create" class="list-group-item list-group-item-action d-flex align-items-center">
+        <a href="/@warpgate#/config/targets/create" class="list-group-item list-group-item-action d-flex align-items-center">
             <Fa icon={setupState.hasTargets ? faCircleCheck : faCircle} />
             <div class="item-text">
                 <div>Add a target</div>
@@ -29,7 +54,7 @@
             </div>
         </a>
 
-        <a href="/@warpgate/admin#/config/users/create" class="list-group-item list-group-item-action d-flex align-items-center">
+        <a href="/@warpgate#/config/users/create" class="list-group-item list-group-item-action d-flex align-items-center">
             <Fa icon={setupState.hasUsers ? faCircleCheck : faCircle} />
             <div class="item-text">
                 <div>Add a non-admin user</div>
@@ -38,6 +63,7 @@
         </a>
     </ListGroup>
 </div>
+{/if}
 
 
 <style lang="scss">
@@ -47,10 +73,25 @@
         border-bottom: 1px solid transparent;
         padding: 1.5rem 0.5rem;
 
+        .heading {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
         h2 {
             font-family: 'Poppins';
             font-weight: 700;
-            margin-bottom: 1rem;
+            margin: 0;
+        }
+
+        .heading :global(.dismiss) {
+            margin-left: auto;
+            color: var(--bs-secondary-color);
+            font-size: 1.5rem;
+            line-height: 1;
+            text-decoration: none;
         }
 
         .item-text {

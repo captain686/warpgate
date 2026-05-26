@@ -9,10 +9,15 @@
 
     export type ExtendedPublicKeyCredential = ExistingPublicKeyCredentialModel & {
         issuedByWarpgate?: boolean
+        targetId?: string
         expiresAt?: Date
         maxUses?: number
         usesLeft?: number
         revokedAt?: Date
+    }
+
+    export type ExtendedOtpCredential = ExistingOtpCredentialModel & {
+        targetId?: string
     }
 
     export type ExistingCredential =
@@ -20,12 +25,12 @@
         | { kind: 'Sso' } & ExistingSsoCredentialModel
         | { kind: 'PublicKey' } & ExtendedPublicKeyCredential
         | { kind: 'Certificate' } & ExistingCertificateCredentialModel
-        | { kind: 'Totp' } & ExistingOtpCredentialModel
+        | { kind: 'Totp' } & ExtendedOtpCredential
 </script>
 
 <script lang="ts">
     import { faCertificate, faIdBadge, faKey, faKeyboard, faMobileScreen } from '@fortawesome/free-solid-svg-icons'
-    import { api, CredentialKind, type ExistingPublicKeyCredential, type ExistingSsoCredential, type UserRequireCredentialsPolicy, type ParameterValues } from 'admin/lib/api'
+    import { api, CredentialKind, type ExistingPublicKeyCredential, type ExistingSsoCredential, type UserRequireCredentialsPolicy, type ParameterValues, type Target } from 'admin/lib/api'
     import { SvelteSet } from 'svelte/reactivity'
     import Fa from 'svelte-fa'
     import { Button } from '@sveltestrap/sveltestrap'
@@ -53,6 +58,7 @@
 
     let credentials: ExistingCredential[] = $state([])
     let globalParameters: ParameterValues | undefined = $state()
+    let sshTargets: Target[] = $state([])
 
     let creatingPassword = $state(false)
     let creatingOtp = $state(false)
@@ -62,6 +68,7 @@
     let editingPublicKeyCredentialInstance: ExtendedPublicKeyCredential | null = $state(null)
     let editingCertificateCredential = $state(false)
     let issuingPublicKey = $state(false)
+    let selectedSshScopeId = $state('')
 
     const loadPromise = load()
 
@@ -116,7 +123,15 @@
             loadCertificates(),
             loadOtp(),
             loadParameters(),
+            loadTargets(),
         ])
+    }
+
+    async function loadTargets () {
+        const allTargets = await api.getTargets({})
+        sshTargets = allTargets
+            .filter(target => target.options.kind === 'Ssh')
+            .sort((a, b) => a.name.localeCompare(b.name))
     }
 
     async function loadParameters () {
@@ -154,7 +169,7 @@
     async function loadOtp () {
         credentials.push(...(await api.getOtpCredentials({ userId })).map(c => ({
             kind: CredentialKind.Totp,
-            ...c,
+            ...normalizeOtpCredential(c),
         })))
     }
 
@@ -217,16 +232,17 @@
         })
     }
 
-    async function createOtp (secretKey: number[]) {
+    async function createOtp (secretKey: number[], targetId?: string) {
         const credential = await api.createOtpCredential({
             userId,
             newOtpCredential: {
                 secretKey,
-            },
+                targetId,
+            } as any,
         })
         credentials.push({
             kind: CredentialKind.Totp,
-            ...credential,
+            ...normalizeOtpCredential(credential),
         })
 
         // Automatically set up a 2FA policy when adding an OTP
@@ -275,13 +291,16 @@
 
     async function savePublicKeyCredential (label: string, opensshPublicKey: string) {
         if (editingPublicKeyCredentialInstance) {
-            editingPublicKeyCredentialInstance.label = label
-            editingPublicKeyCredentialInstance.opensshPublicKey = opensshPublicKey
             await api.updatePublicKeyCredential({
                 userId,
                 id: editingPublicKeyCredentialInstance.id,
-                newPublicKeyCredential: editingPublicKeyCredentialInstance,
+                newPublicKeyCredential: {
+                    label,
+                    opensshPublicKey,
+                },
             })
+            editingPublicKeyCredentialInstance.label = label
+            editingPublicKeyCredentialInstance.opensshPublicKey = opensshPublicKey
         } else {
             const credential = await api.createPublicKeyCredential({
                 userId,
@@ -318,6 +337,14 @@
         return Number.isFinite(parsed) ? parsed : undefined
     }
 
+    function parseMaybeString(value: unknown): string | undefined {
+        if (value === null || value === undefined) {
+            return undefined
+        }
+        const text = String(value).trim()
+        return text || undefined
+    }
+
     function normalizePublicKeyCredential(
         raw: ExistingPublicKeyCredential | Record<string, unknown>
     ): ExtendedPublicKeyCredential {
@@ -331,6 +358,7 @@
             id,
             label,
             opensshPublicKey,
+            targetId: parseMaybeString(rawRecord.targetId ?? rawRecord.target_id),
             dateAdded: parseMaybeDate(rawRecord.dateAdded ?? rawRecord.date_added),
             lastUsed: parseMaybeDate(rawRecord.lastUsed ?? rawRecord.last_used),
             issuedByWarpgate: Boolean(rawRecord.issuedByWarpgate ?? rawRecord.issued_by_warpgate),
@@ -341,8 +369,20 @@
         }
     }
 
+    function normalizeOtpCredential(
+        raw: ExistingOtpCredentialModel | Record<string, unknown>
+    ): ExtendedOtpCredential {
+        const rawRecord = raw as Record<string, unknown>
+        return {
+            ...(rawRecord as unknown as ExistingOtpCredentialModel),
+            id: String(rawRecord.id ?? ''),
+            targetId: parseMaybeString(rawRecord.targetId ?? rawRecord.target_id),
+        }
+    }
+
     async function issuePublicKeyCredential(args: {
         label: string
+        targetId?: string
         validForSeconds?: number
         maxUses?: number
         algorithm: 'ed25519' | 'rsa_sha512'
@@ -351,10 +391,11 @@
             userId,
             issuePublicKeyCredentialRequest: {
                 label: args.label,
+                targetId: args.targetId,
                 validForSeconds: args.validForSeconds,
                 maxUses: args.maxUses,
                 algorithm: args.algorithm,
-            },
+            } as any,
         })
         const credential = normalizePublicKeyCredential(
             (body.credential ?? {}) as ExistingPublicKeyCredential | Record<string, unknown>
@@ -409,12 +450,27 @@
 
         return response
     }
+
+    function targetLabel(targetId?: string): string {
+        if (!targetId) {
+            return 'all SSH targets'
+        }
+        return sshTargets.find(target => target.id === targetId)?.name ?? targetId
+    }
 </script>
 
 <div class="d-flex mt-4 mb-2 header">
     <h4 class="m-0">Credentials</h4>
     <span class="ms-auto"></span>
     {#if $adminPermissions.usersEdit}
+    {#if sshTargets.length > 0}
+    <select class="form-select form-select-sm ssh-scope-selector me-2" bind:value={selectedSshScopeId}>
+        <option value="">All SSH targets</option>
+        {#each sshTargets as target (target.id)}
+            <option value={target.id}>{target.name}</option>
+        {/each}
+    </select>
+    {/if}
     <Button size="sm" color="link" on:click={() => creatingPassword = true}>
         Add password
     </Button>
@@ -483,6 +539,7 @@
                         {/if}
                     </div>
                     <small class="d-block text-muted">{abbreviatePublicKey(credential.opensshPublicKey)}</small>
+                    <small class="d-block text-muted">Scope: {targetLabel(credential.targetId)}</small>
                     {#if credential.issuedByWarpgate}
                         <small class="d-block text-muted">
                             {#if credential.expiresAt}
@@ -513,7 +570,10 @@
             {/if}
             {#if credential.kind === 'Totp'}
                 <Fa fw icon={faMobileScreen} />
-                <span class="label me-auto">One-time password</span>
+                <div class="main me-auto">
+                    <span class="label d-block">One-time password</span>
+                    <small class="d-block text-muted">Scope: {targetLabel(credential.targetId)}</small>
+                </div>
             {/if}
             {#if credential.kind === CredentialKind.Sso}
                 <Fa fw icon={faIdBadge} />
@@ -529,7 +589,7 @@
                 class="px-0"
                 color="link"
                 disabled={credential.kind === CredentialKind.PublicKey && (ldapLinked || !$adminPermissions.usersEdit || credential.issuedByWarpgate)}
-                onclick={e => {
+                on:click={e => {
                     if (credential.kind === CredentialKind.Sso) {
                         editingSsoCredentialInstance = credential
                         editingSsoCredential = true
@@ -548,7 +608,7 @@
                 class="px-0"
                 color="link"
                 disabled={ldapLinked || !$adminPermissions.usersEdit}
-                onclick={e => {
+                on:click={e => {
                     revokeIssuedPublicKeyCredential(credential)
                     e.preventDefault()
                 }}>
@@ -560,7 +620,7 @@
                 class="px-0"
                 color="link"
                 disabled={credential.kind === CredentialKind.PublicKey && (ldapLinked || !$adminPermissions.usersEdit)}
-                onclick={e => {
+                on:click={e => {
                     deleteCredential(credential)
                     e.preventDefault()
                 }}>
@@ -605,6 +665,8 @@
 <CreateOtpModal
     bind:isOpen={creatingOtp}
     {username}
+    sshTargets={sshTargets.map(target => ({ id: target.id, name: target.name }))}
+    defaultTargetId={selectedSshScopeId}
     create={createOtp}
 />
 {/if}
@@ -628,6 +690,8 @@
 {#if issuingPublicKey}
 <IssuedPublicKeyModal
     bind:isOpen={issuingPublicKey}
+    sshTargets={sshTargets.map(target => ({ id: target.id, name: target.name }))}
+    defaultTargetId={selectedSshScopeId}
     issue={issuePublicKeyCredential}
     onClose={() => {
         issuingPublicKey = false
@@ -660,10 +724,20 @@
         align-items: center;
     }
 
+    .ssh-scope-selector {
+        max-width: 16rem;
+    }
+
     @media (max-width: 720px) {
         .header {
             flex-direction: column;
             align-items: start;
+        }
+
+        .ssh-scope-selector {
+            max-width: 100%;
+            width: 100%;
+            margin-bottom: .5rem;
         }
     }
 </style>

@@ -5,6 +5,12 @@ import Fa from 'svelte-fa'
 import { api } from 'gateway/lib/api'
 import { serverInfo, reloadServerInfo } from 'gateway/lib/store'
 import { Button, Dropdown, DropdownItem, DropdownMenu, DropdownToggle } from '@sveltestrap/sveltestrap'
+import { getContext } from 'svelte'
+
+const profileHrefContext = getContext<string | (() => string)>('warpgate.profileHref')
+const resolveProfileHref = typeof profileHrefContext === 'function'
+    ? profileHrefContext
+    : () => profileHrefContext ?? '/@warpgate#/profile'
 
 async function logout () {
     await api.logout()
@@ -19,7 +25,7 @@ async function singleLogout () {
 </script>
 
 {#if $serverInfo?.username}
-    <a href="/@warpgate/#/profile">
+    <a href={resolveProfileHref()}>
         {$serverInfo.username}
     </a>
     {#if $serverInfo.authorizedViaTicket}

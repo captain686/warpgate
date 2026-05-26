@@ -171,7 +171,7 @@ pub fn gateway_redirect(req: &Request) -> Response {
         .map_or_else(String::new, ToString::to_string);
 
     let path = format!(
-        "/@warpgate#/login?next={}",
+        "/@warpgate/gateway#/login?next={}",
         utf8_percent_encode(&path, NON_ALPHANUMERIC),
     );
 

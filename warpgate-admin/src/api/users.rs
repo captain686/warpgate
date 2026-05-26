@@ -9,20 +9,31 @@ use time::OffsetDateTime;
 use tracing::warn;
 use uuid::Uuid;
 use warpgate_common::{
-    AdminPermission, AdminRole as AdminRoleConfig, User as UserConfig,
-    UserRequireCredentialsPolicy, WarpgateError,
+    AdminPermission, AdminRole as AdminRoleConfig, Secret, User as UserConfig,
+    UserPasswordCredential, UserRequireCredentialsPolicy, WarpgateError,
 };
 use warpgate_common_http::AuthenticatedRequestContext;
-use warpgate_core::logging::{AuditEvent, format_related_ids};
-use warpgate_db_entities::{AdminRole, Role, User, UserAdminRoleAssignment, UserRoleAssignment};
+use warpgate_core::logging::{AuditEvent, CredentialChangedVia, format_related_ids};
+use warpgate_db_entities::{
+    AdminRole, PasswordCredential, Role, User, UserAdminRoleAssignment, UserRoleAssignment,
+};
 
 use super::AnySecurityScheme;
-use crate::api::common::{case_insensitive_search, require_admin_permission};
+use crate::api::common::{
+    case_insensitive_search, require_admin_permission, require_manage_admin_accounts_permission,
+};
 
 #[derive(Object)]
 struct CreateUserRequest {
     username: String,
     description: Option<String>,
+    password: Option<Secret<String>>,
+}
+
+#[derive(Object)]
+struct CreateUserResponseBody {
+    user: UserConfig,
+    generated_password: Option<Secret<String>>,
 }
 
 #[derive(Object)]
@@ -43,7 +54,7 @@ enum GetUsersResponse {
 #[allow(clippy::large_enum_variant)]
 enum CreateUserResponse {
     #[oai(status = 201)]
-    Created(Json<UserConfig>),
+    Created(Json<CreateUserResponseBody>),
 
     #[oai(status = 400)]
     BadRequest(Json<String>),
@@ -89,15 +100,35 @@ impl ListApi {
     ) -> Result<CreateUserResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::UsersCreate)).await?;
 
-        if body.username.is_empty() {
+        let username = body.username.trim().to_string();
+        if username.is_empty() {
             return Ok(CreateUserResponse::BadRequest(Json("name".into())));
         }
 
         let db = ctx.services().db.lock().await;
+        let existing = User::Entity::find()
+            .filter(User::Column::Username.eq(&username))
+            .one(&*db)
+            .await?;
+        if existing.is_some() {
+            return Err(WarpgateError::UserAlreadyExists(username));
+        }
+
+        let (password, generated_password) = match body
+            .password
+            .clone()
+            .filter(|password| !password.expose_secret().trim().is_empty())
+        {
+            Some(password) => (password, None),
+            None => {
+                let generated = Secret::random();
+                (generated.clone(), Some(generated))
+            }
+        };
 
         let values = User::ActiveModel {
             id: Set(Uuid::new_v4()),
-            username: Set(body.username.clone()),
+            username: Set(username),
             credential_policy: Set(
                 serde_json::to_value(UserRequireCredentialsPolicy::default())
                     .map_err(WarpgateError::from)?,
@@ -110,9 +141,31 @@ impl ListApi {
         };
 
         let user = values.insert(&*db).await.map_err(WarpgateError::from)?;
+
+        PasswordCredential::ActiveModel {
+            id: Set(Uuid::new_v4()),
+            user_id: Set(user.id),
+            ..PasswordCredential::ActiveModel::from(UserPasswordCredential::from_password(
+                &password,
+            ))
+        }
+        .insert(&*db)
+        .await
+        .map_err(WarpgateError::from)?;
+
         let default_roles = Role::Entity::grant_default_roles(&db, user.id).await?;
 
         AuditEvent::UserCreated {
+            user_id: user.id,
+            username: user.username.clone(),
+            actor_user_id: ctx.auth.user_id(),
+        }
+        .emit();
+
+        AuditEvent::CredentialCreated {
+            credential_type: "password".to_string(),
+            credential_name: None,
+            via: CredentialChangedVia::Admin,
             user_id: user.id,
             username: user.username.clone(),
             actor_user_id: ctx.auth.user_id(),
@@ -131,7 +184,10 @@ impl ListApi {
             .emit();
         }
 
-        Ok(CreateUserResponse::Created(Json(user.try_into()?)))
+        Ok(CreateUserResponse::Created(Json(CreateUserResponseBody {
+            user: user.try_into()?,
+            generated_password,
+        })))
     }
 }
 
@@ -219,6 +275,7 @@ impl DetailApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<UpdateUserResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::UsersEdit)).await?;
+        require_manage_admin_accounts_permission(&ctx, id.0).await?;
 
         let db = ctx.services().db.lock().await;
 
@@ -261,6 +318,7 @@ impl DetailApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<DeleteUserResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::UsersDelete)).await?;
+        require_manage_admin_accounts_permission(&ctx, id.0).await?;
 
         let db = ctx.services().db.lock().await;
 
@@ -302,6 +360,7 @@ impl DetailApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<UnlinkUserFromLdapResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::UsersEdit)).await?;
+        require_manage_admin_accounts_permission(&ctx, id.0).await?;
 
         let db = ctx.services().db.lock().await;
 
@@ -337,6 +396,7 @@ impl DetailApi {
         use warpgate_db_entities::LdapServer;
 
         require_admin_permission(&ctx, Some(AdminPermission::UsersEdit)).await?;
+        require_manage_admin_accounts_permission(&ctx, id.0).await?;
 
         let db = ctx.services().db.lock().await;
 
@@ -607,6 +667,7 @@ impl RolesApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<AddUserRoleResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::AccessRolesAssign)).await?;
+        require_manage_admin_accounts_permission(&ctx, id.0).await?;
 
         let db = ctx.services().db.lock().await;
         let expires_at = body.0.and_then(|b| b.expires_at);
@@ -651,6 +712,7 @@ impl RolesApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<DeleteUserRoleResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::AccessRolesAssign)).await?;
+        require_manage_admin_accounts_permission(&ctx, id.0).await?;
 
         let db = ctx.services().db.lock().await;
 
@@ -704,6 +766,7 @@ impl RolesApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<UpdateUserRoleResponse, WarpgateError> {
         require_admin_permission(&ctx, None).await?;
+        require_manage_admin_accounts_permission(&ctx, id.0).await?;
         let db = ctx.services().db.lock().await;
 
         let Some(role) = Role::Entity::find_by_id(role_id.0).one(&*db).await? else {
@@ -773,6 +836,7 @@ impl RolesApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<AddUserAdminRoleResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::AdminRolesManage)).await?;
+        require_admin_permission(&ctx, Some(AdminPermission::UsersManageAdmins)).await?;
 
         let db = ctx.services().db.lock().await;
 
@@ -831,6 +895,7 @@ impl RolesApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<DeleteUserAdminRoleResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::AdminRolesManage)).await?;
+        require_manage_admin_accounts_permission(&ctx, id.0).await?;
 
         let db = ctx.services().db.lock().await;
 

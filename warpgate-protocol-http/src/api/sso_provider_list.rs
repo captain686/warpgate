@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use poem::Request;
 use poem::session::Session;
 use poem::web::{Data, Form};
@@ -83,7 +84,10 @@ enum StartSloResponse {
 
 fn make_redirect_url(err: &str) -> String {
     error!("SSO error: {err}");
-    format!("/@warpgate?login_error={err}")
+    format!(
+        "/@warpgate/gateway?login_error={}",
+        utf8_percent_encode(err, NON_ALPHANUMERIC),
+    )
 }
 
 #[OpenApi]
@@ -287,7 +291,7 @@ impl Api {
             )));
         }
 
-        if cp.validate_credential(&username, &cred).await? {
+        if cp.validate_credential(&username, &cred, None).await? {
             state.add_valid_credential(cred);
         } else {
             return Ok(Err(format!(
@@ -381,7 +385,7 @@ impl Api {
         let mut next_url = context
             .next_url
             .as_deref()
-            .unwrap_or("/@warpgate#/login")
+            .unwrap_or("/@warpgate/gateway#/login")
             .to_owned();
 
         if let Some(ref host) = context.return_host

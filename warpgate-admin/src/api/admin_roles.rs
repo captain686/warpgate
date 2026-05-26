@@ -24,6 +24,7 @@ struct AdminRoleDataRequest {
     users_create: bool,
     users_edit: bool,
     users_delete: bool,
+    users_manage_admins: Option<bool>,
 
     access_roles_create: bool,
     access_roles_edit: bool,
@@ -145,6 +146,7 @@ impl ListApi {
             users_create: Set(body.users_create),
             users_edit: Set(body.users_edit),
             users_delete: Set(body.users_delete),
+            users_manage_admins: Set(body.users_manage_admins.unwrap_or_default()),
             access_roles_create: Set(body.access_roles_create),
             access_roles_edit: Set(body.access_roles_edit),
             access_roles_delete: Set(body.access_roles_delete),
@@ -218,6 +220,7 @@ impl DetailApi {
         model.users_create = Set(body.users_create);
         model.users_edit = Set(body.users_edit);
         model.users_delete = Set(body.users_delete);
+        model.users_manage_admins = Set(body.users_manage_admins.unwrap_or_default());
         model.access_roles_create = Set(body.access_roles_create);
         model.access_roles_edit = Set(body.access_roles_edit);
         model.access_roles_delete = Set(body.access_roles_delete);

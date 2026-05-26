@@ -19,7 +19,7 @@ use poem::endpoint::{EmbeddedFileEndpoint, EmbeddedFilesEndpoint};
 use poem::listener::{Listener, RustlsConfig};
 use poem::middleware::SetHeader;
 use poem::session::{CookieConfig, MemoryStorage, ServerSession};
-use poem::web::Data;
+use poem::web::{Data, Redirect};
 use poem::{Endpoint, EndpointExt, FromRequest, IntoEndpoint, IntoResponse, Route, Server};
 use poem_openapi::OpenApiService;
 use tokio::sync::Mutex;
@@ -46,6 +46,11 @@ use crate::error::error_page;
 use crate::middleware::{CookieHostMiddleware, TicketMiddleware};
 use crate::session::{SessionStore, SharedSessionStorage};
 use crate::session_handle::warpgate_server_handle_for_request;
+
+#[poem::handler]
+fn redirect_admin_home() -> Redirect {
+    Redirect::temporary("/@warpgate")
+}
 
 pub struct HTTPProtocolServer {
     services: Services,
@@ -198,9 +203,10 @@ impl ProtocolServer for HTTPProtocolServer {
                     "/admin/api",
                     endpoint_auth(admin_api_app).with(cache_bust()),
                 )
+                .at("/admin", redirect_admin_home)
                 .at(
-                    "/admin",
-                    page_auth(EmbeddedFileEndpoint::<Assets>::new("src/admin/index.html"))
+                    "/gateway",
+                    EmbeddedFileEndpoint::<Assets>::new("src/gateway/index.html")
                         .with(cache_bust()),
                 )
                 .at(
@@ -213,7 +219,7 @@ impl ProtocolServer for HTTPProtocolServer {
                 )
                 .at(
                     "",
-                    EmbeddedFileEndpoint::<Assets>::new("src/gateway/index.html")
+                    page_auth(EmbeddedFileEndpoint::<Assets>::new("src/admin/index.html"))
                         .with(cache_bust()),
                 )
                 .around({

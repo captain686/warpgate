@@ -169,7 +169,7 @@
                             {#if ADMIN_PERMISSIONS.find(p=>p.key===key)?.dangerous}
                                 <span id="warn-{key}" class="text-warning ms-1">⚠️</span>
                                 <Tooltip target="warn-{key}" animation delay="250">
-                                    Grants the ability to manage admin roles; use with care.
+                                    {ADMIN_PERMISSIONS.find(p => p.key === key)?.dangerHint ?? 'High-risk permission.'}
                                 </Tooltip>
                             {/if}
                         </span>

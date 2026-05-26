@@ -3,31 +3,44 @@
     import AsyncButton from 'common/AsyncButton.svelte'
     import CopyButton from 'common/CopyButton.svelte'
     import Alert from 'common/sveltestrap-s5-ports/Alert.svelte'
-    import type { ExistingPublicKeyCredential } from './lib/api'
 
     type KeyAlgorithm = 'ed25519' | 'rsa_sha512'
 
     interface IssuePublicKeyArgs {
         label: string
+        targetId?: string
         validForSeconds?: number
         maxUses?: number
         algorithm: KeyAlgorithm
     }
 
     interface IssuePublicKeyResult {
-        credential: ExistingPublicKeyCredential
+        credential: {
+            label: string
+        }
         privateKeyOpenssh: string
+    }
+
+    interface TargetOption {
+        id: string
+        name: string
     }
 
     interface Props {
         isOpen: boolean
         issue: (args: IssuePublicKeyArgs) => Promise<IssuePublicKeyResult>
+        sshTargets?: TargetOption[]
+        defaultTargetId?: string
+        allowGlobalTargetScope?: boolean
         onClose?: () => void
     }
 
     let {
         isOpen = $bindable(false),
         issue,
+        sshTargets = [],
+        defaultTargetId = '',
+        allowGlobalTargetScope = true,
         onClose,
     }: Props = $props()
 
@@ -35,9 +48,10 @@
     let algorithm = $state<KeyAlgorithm>('ed25519')
     let validForSeconds = $state('')
     let maxUses = $state('')
+    let targetId = $state('')
     let errorText: string | undefined = $state()
     let privateKeyOpenssh = $state('')
-    let issuedCredential: ExistingPublicKeyCredential | undefined = $state()
+    let issuedCredential: { label: string } | undefined = $state()
 
     function close() {
         isOpen = false
@@ -45,17 +59,29 @@
         algorithm = 'ed25519'
         validForSeconds = ''
         maxUses = ''
+        targetId = ''
         errorText = undefined
         privateKeyOpenssh = ''
         issuedCredential = undefined
         onClose?.()
     }
 
-    function parsePositiveInt(value: string, fieldName: string): number | undefined {
-        if (!value.trim()) {
+    $effect(() => {
+        if (isOpen) {
+            targetId = defaultTargetId ?? ''
+        }
+    })
+
+    function normalizeText(value: string | number | null | undefined): string {
+        return String(value ?? '').trim()
+    }
+
+    function parsePositiveInt(value: string | number | null | undefined, fieldName: string): number | undefined {
+        const text = normalizeText(value)
+        if (!text) {
             return undefined
         }
-        const parsed = Number.parseInt(value, 10)
+        const parsed = Number.parseInt(text, 10)
         if (!Number.isFinite(parsed) || parsed <= 0) {
             throw new Error(`${fieldName} must be a positive integer`)
         }
@@ -64,14 +90,15 @@
 
     async function issueCredential() {
         errorText = undefined
-        if (!label.trim()) {
+        if (!normalizeText(label)) {
             errorText = 'Label is required'
             return
         }
 
         try {
             const result = await issue({
-                label: label.trim(),
+                label: normalizeText(label),
+                targetId: normalizeText(targetId) || undefined,
                 algorithm,
                 validForSeconds: parsePositiveInt(validForSeconds, 'Validity'),
                 maxUses: parsePositiveInt(maxUses, 'Max uses'),
@@ -88,7 +115,7 @@
         if (!privateKeyOpenssh) {
             return
         }
-        const fileLabel = label.trim() || 'warpgate'
+        const fileLabel = normalizeText(label) || 'warpgate'
         const filename = `${fileLabel}-private-key`
         const blob = new Blob([privateKeyOpenssh], { type: 'text/plain' })
         const url = URL.createObjectURL(blob)
@@ -135,6 +162,17 @@
                 </select>
             </FormGroup>
 
+            <FormGroup floating label="Scope target (optional)">
+                <select bind:value={targetId} class="form-control">
+                    {#if allowGlobalTargetScope}
+                        <option value="">All SSH targets</option>
+                    {/if}
+                    {#each sshTargets as target (target.id)}
+                        <option value={target.id}>{target.name}</option>
+                    {/each}
+                </select>
+            </FormGroup>
+
             <FormGroup floating label="Validity (seconds, optional)">
                 <Input type="number" min="1" step="1" bind:value={validForSeconds} />
             </FormGroup>
@@ -154,7 +192,7 @@
             <AsyncButton
                 color="primary"
                 click={issueCredential}
-                disabled={!label.trim()}
+                disabled={!normalizeText(label)}
             >
                 Issue key
             </AsyncButton>

@@ -11,12 +11,14 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
     pub user_id: Uuid,
+    pub target_id: Option<Uuid>,
     pub secret_key: Vec<u8>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter)]
 pub enum Relation {
     User,
+    Target,
 }
 
 impl RelationTrait for Relation {
@@ -27,6 +29,11 @@ impl RelationTrait for Relation {
                 .to(super::User::Column::Id)
                 .on_delete(ForeignKeyAction::Cascade)
                 .into(),
+            Self::Target => Entity::belongs_to(super::Target::Entity)
+                .from(Column::TargetId)
+                .to(super::Target::Column::Id)
+                .on_delete(ForeignKeyAction::Cascade)
+                .into(),
         }
     }
 }
@@ -34,6 +41,12 @@ impl RelationTrait for Relation {
 impl Related<super::User::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::User.def()
+    }
+}
+
+impl Related<super::Target::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Target.def()
     }
 }
 

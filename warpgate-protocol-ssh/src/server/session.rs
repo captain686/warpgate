@@ -1665,14 +1665,17 @@ impl ServerSession {
         credential: Option<AuthCredential>,
     ) -> Result<bool> {
         match selector {
-            AuthSelector::User { username, .. } => {
+            AuthSelector::User {
+                username,
+                target_name,
+            } => {
                 let cp = self.services.config_provider.clone();
 
                 if let Some(credential) = credential {
                     return Ok(cp
                         .lock()
                         .await
-                        .validate_credential(username, &credential)
+                        .validate_credential(username, &credential, Some(target_name))
                         .await?);
                 }
 
@@ -1732,7 +1735,7 @@ impl ServerSession {
                     && cp
                         .lock()
                         .await
-                        .validate_credential(username, &credential)
+                        .validate_credential(username, &credential, Some(target_name))
                         .await?
                 {
                     state.add_valid_credential(credential);
@@ -1774,6 +1777,7 @@ impl ServerSession {
                             .update_public_key_last_used(
                                 username,
                                 matched_public_key_credential.clone(),
+                                Some(target_name),
                             )
                             .await
                         {

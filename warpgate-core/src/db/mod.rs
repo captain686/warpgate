@@ -41,6 +41,14 @@ fn clamp_log_max_size_megabytes(size_mb: Option<i64>) -> i64 {
         .max(MIN_LOG_MAX_SIZE_MEGABYTES)
 }
 
+fn log_max_age_duration(max_age_seconds: Option<i64>, fallback: &Duration) -> Result<Duration> {
+    let Some(max_age_seconds) = max_age_seconds else {
+        return Ok(*fallback);
+    };
+
+    Ok(Duration::from_secs(u64::try_from(max_age_seconds.max(1))?))
+}
+
 fn log_size_limit_bytes(size_mb: i64) -> Result<u64> {
     let size_mb = u64::try_from(size_mb)?;
     Ok(size_mb.saturating_mul(BYTES_PER_MEGABYTE))
@@ -217,8 +225,10 @@ pub async fn cleanup_db(
 ) -> Result<()> {
     use warpgate_db_entities::{LogEntry, Parameters, Recording, Session, Ticket, TicketRequest};
     let audit_cutoff = OffsetDateTime::now_utc() - time::Duration::try_from(*audit_retention)?;
-    let recording_cutoff = OffsetDateTime::now_utc() - time::Duration::try_from(*retention)?;
     let parameters = Parameters::Entity::get(db).await?;
+    let log_max_age = log_max_age_duration(parameters.log_max_age_seconds, retention)?;
+    let log_cutoff = OffsetDateTime::now_utc() - time::Duration::try_from(log_max_age)?;
+    let recording_cutoff = OffsetDateTime::now_utc() - time::Duration::try_from(*retention)?;
     let log_strategy = LogRetentionStrategy::parse(&parameters.log_retention_strategy);
     let log_size_limit_mb = clamp_log_max_size_megabytes(parameters.log_max_size_megabytes);
 
@@ -232,7 +242,7 @@ pub async fn cleanup_db(
         LogRetentionStrategy::MaxAge => {
             LogEntry::Entity::delete_many()
                 .filter(Expr::col(LogEntry::Column::Target).ne("audit"))
-                .filter(Expr::col(LogEntry::Column::Timestamp).lt(recording_cutoff))
+                .filter(Expr::col(LogEntry::Column::Timestamp).lt(log_cutoff))
                 .exec(db)
                 .await?;
         }

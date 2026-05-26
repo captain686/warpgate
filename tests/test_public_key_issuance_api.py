@@ -83,3 +83,36 @@ def test_revoke_issued_public_key_sets_revocation_and_zero_uses(shared_wg: Warpg
         revoked = next(k for k in keys if k.id == credential_id)
         assert revoked.revoked_at is not None
         assert revoked.uses_left == 0
+
+
+def test_issue_public_key_credential_with_target_scope(shared_wg: WarpgateProcess):
+    """Issuing a key with target_id should persist target scope."""
+    url = f"https://localhost:{shared_wg.http_port}"
+    with admin_client(url) as api:
+        user = api.create_user(sdk.CreateUserRequest(username=f"user-{uuid4()}"))
+        target = api.create_target(
+            sdk.TargetDataRequest(
+                name=f"ssh-{uuid4()}",
+                options=sdk.TargetOptions(
+                    sdk.TargetOptionsTargetSSHOptions(
+                        kind="Ssh",
+                        host="localhost",
+                        port=22,
+                        username="root",
+                        auth=sdk.SSHTargetAuth(
+                            sdk.SSHTargetAuthSshTargetPublicKeyAuth(kind="PublicKey")
+                        ),
+                    )
+                ),
+            )
+        )
+        issued = api.issue_public_key_credential(
+            user.id,
+            {
+                "label": "issued-key-scoped",
+                "algorithm": "ed25519",
+                "target_id": target.id,
+            },
+        )
+
+        assert issued.credential.target_id == target.id

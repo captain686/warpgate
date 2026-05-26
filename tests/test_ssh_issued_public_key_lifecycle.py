@@ -19,6 +19,7 @@ def _setup_user_target_and_issue_key(
     *,
     valid_for_seconds: int | None = None,
     max_uses: int | None = None,
+    target_id: str | None = None,
 ) -> tuple[object, object, str]:
     ssh_port = processes.start_ssh_server(
         trusted_keys=[wg_c_ed25519_pubkey.read_text()]
@@ -51,12 +52,13 @@ def _setup_user_target_and_issue_key(
         api.add_target_role(target.id, role.id)
         issued = api.issue_public_key_credential(
             user.id,
-            sdk.IssuePublicKeyCredentialRequest(
-                label="issued-auth-key",
-                algorithm=sdk.IssuedPublicKeyAlgorithm.ED25519,
-                valid_for_seconds=valid_for_seconds,
-                max_uses=max_uses,
-            ),
+            {
+                "label": "issued-auth-key",
+                "algorithm": "ed25519",
+                "valid_for_seconds": valid_for_seconds,
+                "max_uses": max_uses,
+                "target_id": target_id,
+            },
         )
 
     return user, target, issued.private_key_openssh
@@ -70,6 +72,92 @@ def _write_private_key(tmp_path: Path, key_material: str) -> Path:
 
 
 class TestIssuedPublicKeyLifecycleAuth:
+    def test_issued_key_target_scope_is_enforced(
+        self,
+        processes: ProcessManager,
+        wg_c_ed25519_pubkey: Path,
+        shared_wg: WarpgateProcess,
+        timeout,
+        tmp_path: Path,
+    ):
+        ssh_port = processes.start_ssh_server(
+            trusted_keys=[wg_c_ed25519_pubkey.read_text()]
+        )
+        wait_port(ssh_port)
+
+        url = f"https://localhost:{shared_wg.http_port}"
+        with admin_client(url) as api:
+            role = api.create_role(
+                sdk.RoleDataRequest(name=f"role-{uuid4()}"),
+            )
+            user = api.create_user(sdk.CreateUserRequest(username=f"user-{uuid4()}"))
+            api.add_user_role(user.id, role.id)
+            target_a = api.create_target(
+                sdk.TargetDataRequest(
+                    name=f"ssh-a-{uuid4()}",
+                    options=sdk.TargetOptions(
+                        sdk.TargetOptionsTargetSSHOptions(
+                            kind="Ssh",
+                            host="localhost",
+                            port=ssh_port,
+                            username=processes.ssh_target_username,
+                            auth=sdk.SSHTargetAuth(
+                                sdk.SSHTargetAuthSshTargetPublicKeyAuth(kind="PublicKey")
+                            ),
+                        )
+                    ),
+                )
+            )
+            target_b = api.create_target(
+                sdk.TargetDataRequest(
+                    name=f"ssh-b-{uuid4()}",
+                    options=sdk.TargetOptions(
+                        sdk.TargetOptionsTargetSSHOptions(
+                            kind="Ssh",
+                            host="localhost",
+                            port=ssh_port,
+                            username=processes.ssh_target_username,
+                            auth=sdk.SSHTargetAuth(
+                                sdk.SSHTargetAuthSshTargetPublicKeyAuth(kind="PublicKey")
+                            ),
+                        )
+                    ),
+                )
+            )
+            api.add_target_role(target_a.id, role.id)
+            api.add_target_role(target_b.id, role.id)
+            issued = api.issue_public_key_credential(
+                user.id,
+                {
+                    "label": "issued-scoped-key",
+                    "algorithm": "ed25519",
+                    "target_id": target_a.id,
+                },
+            )
+
+        key_path = _write_private_key(tmp_path, issued.private_key_openssh)
+
+        status, stdout, _stderr = ssh_exec_command_with_public_key(
+            "localhost",
+            shared_wg.ssh_port,
+            f"{user.username}:{target_a.name}",
+            key_path,
+            "ls /bin/sh",
+            timeout=float(timeout),
+        )
+        assert status == 0
+        assert stdout == b"/bin/sh\n"
+
+        with pytest.raises(paramiko.AuthenticationException):
+            ssh_exec_command_with_public_key(
+                "localhost",
+                shared_wg.ssh_port,
+                f"{user.username}:{target_b.name}",
+                key_path,
+                "ls /bin/sh",
+                timeout=float(timeout),
+            )
+
     def test_issued_key_respects_max_uses(
         self,
         processes: ProcessManager,

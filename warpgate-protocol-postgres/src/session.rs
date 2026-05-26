@@ -204,7 +204,7 @@ impl<S: AsyncRead + AsyncWrite + Send + Unpin> PostgresSession<S> {
                                     .config_provider
                                     .lock()
                                     .await
-                                    .validate_credential(&username, &credential)
+                                    .validate_credential(&username, &credential, Some(&target_name))
                                     .await?
                                 {
                                     state.add_valid_credential(credential);

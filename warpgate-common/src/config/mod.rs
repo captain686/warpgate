@@ -184,6 +184,7 @@ pub struct AdminRole {
     pub users_create: bool,
     pub users_edit: bool,
     pub users_delete: bool,
+    pub users_manage_admins: bool,
 
     pub access_roles_create: bool,
     pub access_roles_edit: bool,
@@ -214,6 +215,7 @@ pub enum AdminPermission {
     UsersCreate,
     UsersEdit,
     UsersDelete,
+    UsersManageAdmins,
     AccessRolesCreate,
     AccessRolesEdit,
     AccessRolesDelete,
@@ -237,6 +239,7 @@ impl AdminRole {
             AdminPermission::UsersCreate => self.users_create,
             AdminPermission::UsersEdit => self.users_edit,
             AdminPermission::UsersDelete => self.users_delete,
+            AdminPermission::UsersManageAdmins => self.users_manage_admins,
             AdminPermission::AccessRolesCreate => self.access_roles_create,
             AdminPermission::AccessRolesEdit => self.access_roles_edit,
             AdminPermission::AccessRolesDelete => self.access_roles_delete,

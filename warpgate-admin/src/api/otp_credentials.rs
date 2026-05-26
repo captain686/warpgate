@@ -3,28 +3,35 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, OpenApi};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, ModelTrait, QueryFilter, Set};
+use serde::Deserialize;
 use uuid::Uuid;
 use warpgate_common::{AdminPermission, UserTotpCredential, WarpgateError};
 use warpgate_common_http::AuthenticatedRequestContext;
 use warpgate_core::logging::{AuditEvent, CredentialChangedVia};
-use warpgate_db_entities::{OtpCredential, User};
+use warpgate_db_entities::{OtpCredential, Target, User};
 
 use super::AnySecurityScheme;
-use crate::api::common::require_admin_permission;
+use crate::api::common::{require_admin_permission, require_manage_admin_accounts_permission};
 
 #[derive(Object)]
 struct ExistingOtpCredential {
     id: Uuid,
+    target_id: Option<Uuid>,
 }
 
-#[derive(Object)]
+#[derive(Object, Deserialize)]
 struct NewOtpCredential {
     secret_key: Vec<u8>,
+    #[serde(alias = "targetId")]
+    target_id: Option<Uuid>,
 }
 
 impl From<OtpCredential::Model> for ExistingOtpCredential {
     fn from(credential: OtpCredential::Model) -> Self {
-        Self { id: credential.id }
+        Self {
+            id: credential.id,
+            target_id: credential.target_id,
+        }
     }
 }
 
@@ -34,6 +41,29 @@ impl From<&NewOtpCredential> for UserTotpCredential {
             key: credential.secret_key.clone().into(),
         }
     }
+}
+
+async fn validate_ssh_target(
+    db: &sea_orm::DatabaseConnection,
+    target_id: Option<Uuid>,
+) -> Result<Option<Uuid>, WarpgateError> {
+    let Some(target_id) = target_id else {
+        return Ok(None);
+    };
+
+    let Some(target) = Target::Entity::find_by_id(target_id).one(db).await? else {
+        return Err(WarpgateError::InvalidRequest(format!(
+            "target_id {target_id} not found"
+        )));
+    };
+
+    if target.kind != Target::TargetKind::Ssh {
+        return Err(WarpgateError::InvalidRequest(
+            "target_id must reference an SSH target".into(),
+        ));
+    }
+
+    Ok(Some(target.id))
 }
 
 #[derive(ApiResponse)]
@@ -92,12 +122,15 @@ impl ListApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<CreateOtpCredentialResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::UsersEdit)).await?;
+        require_manage_admin_accounts_permission(&ctx, *user_id).await?;
 
         let db = ctx.services().db.lock().await;
+        let target_id = validate_ssh_target(&db, body.target_id).await?;
 
         let object = OtpCredential::ActiveModel {
             id: Set(Uuid::new_v4()),
             user_id: Set(*user_id),
+            target_id: Set(target_id),
             ..OtpCredential::ActiveModel::from(UserTotpCredential::from(&*body))
         }
         .insert(&*db)
@@ -147,6 +180,7 @@ impl DetailApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<DeleteCredentialResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::UsersEdit)).await?;
+        require_manage_admin_accounts_permission(&ctx, *user_id).await?;
 
         let db = ctx.services().db.lock().await;
 
