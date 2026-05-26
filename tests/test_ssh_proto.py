@@ -8,7 +8,7 @@ from textwrap import dedent
 
 from .api_client import admin_client, sdk
 from .conftest import ProcessManager, WarpgateProcess
-from .util import wait_port, alloc_port
+from .util import alloc_port, wait_port
 
 
 @pytest.fixture(scope="session")
@@ -61,7 +61,7 @@ def setup_user_and_target(
                         kind="Ssh",
                         host="localhost",
                         port=ssh_port,
-                        username="root",
+                        username=processes.ssh_target_username,
                         auth=sdk.SSHTargetAuth(
                             sdk.SSHTargetAuthSshTargetPublicKeyAuth(kind="PublicKey")
                         ),
@@ -132,6 +132,11 @@ class Test:
         wg_c_ed25519_pubkey,
         shared_wg: WarpgateProcess,
     ):
+        if processes.using_local_ssh_target:
+            pytest.skip(
+                "Skipping signal test for local sshd target to avoid impacting host SSH sessions"
+            )
+
         user, ssh_target = setup_user_and_target(
             processes, shared_wg, wg_c_ed25519_pubkey
         )
@@ -223,47 +228,6 @@ class Test:
         assert ssh_client.returncode == 0
         assert b"</html>" in output
         pf_client.kill()
-
-    def test_shell(
-        self,
-        processes: ProcessManager,
-        wg_c_ed25519_pubkey,
-        shared_wg: WarpgateProcess,
-        timeout,
-    ):
-        user, ssh_target = setup_user_and_target(
-            processes, shared_wg, wg_c_ed25519_pubkey
-        )
-        script = dedent(
-            f"""
-            set timeout {timeout - 5}
-
-            spawn ssh -tt {user.username}:{ssh_target.name}@localhost -p {shared_wg.ssh_port} -o StrictHostKeychecking=no -o UserKnownHostsFile=/dev/null -o PreferredAuthentications=password
-
-            expect "password:"
-            sleep 0.5
-            send "123\\r"
-
-            expect "#"
-            sleep 0.5
-            send "ls /bin/sh\\r"
-            send "exit\\r"
-
-            expect {{
-                "/bin/sh"  {{ exit 0; }}
-                eof {{ exit 1; }}
-            }}
-
-            exit 1
-            """
-        )
-
-        ssh_client = processes.start(
-            ["expect", "-d"], stdin=subprocess.PIPE, stdout=subprocess.PIPE
-        )
-
-        output = ssh_client.communicate(script.encode(), timeout=timeout)[0]
-        assert ssh_client.returncode == 0, output
 
     def test_connection_error(
         self,

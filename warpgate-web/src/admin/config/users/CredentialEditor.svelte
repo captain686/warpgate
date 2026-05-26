@@ -1,21 +1,38 @@
 <script lang="ts" module>
+    import type {
+        ExistingCertificateCredential as ExistingCertificateCredentialModel,
+        ExistingOtpCredential as ExistingOtpCredentialModel,
+        ExistingPasswordCredential as ExistingPasswordCredentialModel,
+        ExistingPublicKeyCredential as ExistingPublicKeyCredentialModel,
+        ExistingSsoCredential as ExistingSsoCredentialModel,
+    } from '../../lib/api'
+
+    export type ExtendedPublicKeyCredential = ExistingPublicKeyCredentialModel & {
+        issuedByWarpgate?: boolean
+        expiresAt?: Date
+        maxUses?: number
+        usesLeft?: number
+        revokedAt?: Date
+    }
+
     export type ExistingCredential =
-        { kind: typeof CredentialKind.Password } & ExistingPasswordCredential
-        | { kind: typeof CredentialKind.Sso } & ExistingSsoCredential
-        | { kind: typeof CredentialKind.PublicKey } & ExistingPublicKeyCredential
-        | { kind: typeof CredentialKind.Certificate } & ExistingCertificateCredential
-        | { kind: typeof CredentialKind.Totp } & ExistingOtpCredential
+        { kind: 'Password' } & ExistingPasswordCredentialModel
+        | { kind: 'Sso' } & ExistingSsoCredentialModel
+        | { kind: 'PublicKey' } & ExtendedPublicKeyCredential
+        | { kind: 'Certificate' } & ExistingCertificateCredentialModel
+        | { kind: 'Totp' } & ExistingOtpCredentialModel
 </script>
 
 <script lang="ts">
     import { faCertificate, faIdBadge, faKey, faKeyboard, faMobileScreen } from '@fortawesome/free-solid-svg-icons'
-    import { api, CredentialKind, type ExistingPasswordCredential, type ExistingPublicKeyCredential, type ExistingSsoCredential, type ExistingOtpCredential, type UserRequireCredentialsPolicy, type ParameterValues, type ExistingCertificateCredential } from 'admin/lib/api'
+    import { api, CredentialKind, type ExistingPublicKeyCredential, type ExistingSsoCredential, type UserRequireCredentialsPolicy, type ParameterValues } from 'admin/lib/api'
     import { SvelteSet } from 'svelte/reactivity'
     import Fa from 'svelte-fa'
     import { Button } from '@sveltestrap/sveltestrap'
     import CreatePasswordModal from '../../CreatePasswordModal.svelte'
     import SsoCredentialModal from '../../SsoCredentialModal.svelte'
     import PublicKeyCredentialModal from '../../PublicKeyCredentialModal.svelte'
+    import IssuedPublicKeyModal from '../../IssuedPublicKeyModal.svelte'
     import CertificateCredentialModal from '../../CertificateCredentialModal.svelte'
     import CreateOtpModal from '../../CreateOtpModal.svelte'
     import AuthPolicyEditor from './AuthPolicyEditor.svelte'
@@ -42,8 +59,9 @@
     let editingSsoCredential = $state(false)
     let editingSsoCredentialInstance: ExistingSsoCredential|null = $state(null)
     let editingPublicKeyCredential = $state(false)
-    let editingPublicKeyCredentialInstance: ExistingPublicKeyCredential|null = $state(null)
+    let editingPublicKeyCredentialInstance: ExtendedPublicKeyCredential | null = $state(null)
     let editingCertificateCredential = $state(false)
+    let issuingPublicKey = $state(false)
 
     const loadPromise = load()
 
@@ -74,8 +92,12 @@
                 if (kind === CredentialKind.Password && !globalParameters.sshClientAuthPassword) {
                     continue
                 }
-                // Totp and WebUserApproval require keyboard-interactive auth enabled
-                if ((kind === CredentialKind.Totp || kind === CredentialKind.WebUserApproval) && !globalParameters.sshClientAuthKeyboardInteractive) {
+                // WebUserApproval requires keyboard-interactive.
+                if (kind === CredentialKind.WebUserApproval && !globalParameters.sshClientAuthKeyboardInteractive) {
+                    continue
+                }
+                // OTP requires both keyboard-interactive transport and OTP auth toggle.
+                if (kind === CredentialKind.Totp && (!globalParameters.sshClientAuthKeyboardInteractive || !globalParameters.sshClientAuthOtp)) {
                     continue
                 }
                 filtered.add(kind)
@@ -118,7 +140,7 @@
     async function loadPublicKeys () {
         credentials.push(...(await api.getPublicKeyCredentials({ userId })).map(c => ({
             kind: CredentialKind.PublicKey,
-            ...c,
+            ...normalizePublicKeyCredential(c),
         })))
     }
 
@@ -143,8 +165,6 @@
             }
         }
 
-        credentials = credentials.filter(c => c !== credential)
-
         if (credential.kind === CredentialKind.Password) {
             await api.deletePasswordCredential({
                 id: credential.id,
@@ -158,10 +178,15 @@
             })
         }
         if (credential.kind === CredentialKind.PublicKey) {
-            await api.deletePublicKeyCredential({
-                id: credential.id,
-                userId,
-            })
+            if (credential.issuedByWarpgate) {
+                await revokeIssuedPublicKeyCredential(credential)
+                return
+            } else {
+                await api.deletePublicKeyCredential({
+                    id: credential.id,
+                    userId,
+                })
+            }
         }
         if (credential.kind === CredentialKind.Certificate) {
             await api.revokeCertificateCredential({
@@ -175,6 +200,8 @@
                 userId,
             })
         }
+
+        credentials = credentials.filter(c => c !== credential)
     }
 
     async function createPassword (password: string) {
@@ -272,6 +299,100 @@
         editingPublicKeyCredentialInstance = null
     }
 
+    function parseMaybeDate(value: unknown): Date | undefined {
+        if (!value) {
+            return undefined
+        }
+        if (value instanceof Date) {
+            return value
+        }
+        const parsed = new Date(String(value))
+        return Number.isNaN(parsed.getTime()) ? undefined : parsed
+    }
+
+    function parseMaybeNumber(value: unknown): number | undefined {
+        if (value === null || value === undefined || value === '') {
+            return undefined
+        }
+        const parsed = Number(value)
+        return Number.isFinite(parsed) ? parsed : undefined
+    }
+
+    function normalizePublicKeyCredential(
+        raw: ExistingPublicKeyCredential | Record<string, unknown>
+    ): ExtendedPublicKeyCredential {
+        const rawRecord = raw as Record<string, unknown>
+        const id = String(rawRecord.id ?? '')
+        const label = String(rawRecord.label ?? '')
+        const opensshPublicKey = String(rawRecord.opensshPublicKey ?? rawRecord.openssh_public_key ?? '')
+
+        return {
+            ...(rawRecord as unknown as ExistingPublicKeyCredential),
+            id,
+            label,
+            opensshPublicKey,
+            dateAdded: parseMaybeDate(rawRecord.dateAdded ?? rawRecord.date_added),
+            lastUsed: parseMaybeDate(rawRecord.lastUsed ?? rawRecord.last_used),
+            issuedByWarpgate: Boolean(rawRecord.issuedByWarpgate ?? rawRecord.issued_by_warpgate),
+            expiresAt: parseMaybeDate(rawRecord.expiresAt ?? rawRecord.expires_at),
+            maxUses: parseMaybeNumber(rawRecord.maxUses ?? rawRecord.max_uses),
+            usesLeft: parseMaybeNumber(rawRecord.usesLeft ?? rawRecord.uses_left),
+            revokedAt: parseMaybeDate(rawRecord.revokedAt ?? rawRecord.revoked_at),
+        }
+    }
+
+    async function issuePublicKeyCredential(args: {
+        label: string
+        validForSeconds?: number
+        maxUses?: number
+        algorithm: 'ed25519' | 'rsa_sha512'
+    }): Promise<{ credential: ExtendedPublicKeyCredential, privateKeyOpenssh: string }> {
+        const body = await api.issuePublicKeyCredential({
+            userId,
+            issuePublicKeyCredentialRequest: {
+                label: args.label,
+                validForSeconds: args.validForSeconds,
+                maxUses: args.maxUses,
+                algorithm: args.algorithm,
+            },
+        })
+        const credential = normalizePublicKeyCredential(
+            (body.credential ?? {}) as ExistingPublicKeyCredential | Record<string, unknown>
+        )
+
+        credentials.push({
+            kind: CredentialKind.PublicKey,
+            ...credential,
+        })
+
+        return {
+            credential,
+            privateKeyOpenssh: String(body.privateKeyOpenssh ?? ''),
+        }
+    }
+
+    async function revokeIssuedPublicKeyCredential(credential: ExtendedPublicKeyCredential) {
+        if (!confirm('Revoke this issued SSH key? This cannot be undone.')) {
+            return
+        }
+
+        await api.revokePublicKeyCredential({
+            userId,
+            id: credential.id,
+        })
+
+        credentials = credentials.map(c => {
+            if (c.kind !== CredentialKind.PublicKey || c.id !== credential.id) {
+                return c
+            }
+            return {
+                ...c,
+                revokedAt: new Date(),
+                usesLeft: 0,
+            }
+        })
+    }
+
     async function saveCertificateCredential (label: string, publicKeyPem: string) {
         const response = await api.issueCertificateCredential({
             userId,
@@ -314,6 +435,18 @@
         title={ldapLinked ? 'SSH keys are managed by LDAP' : ''}
     >Add public key</Button>
     <Tooltip delay="250" target="addPublicKeyCredentialButton" animation>Public key credentials will be loaded from LDAP</Tooltip>
+    <Button
+        size="sm"
+        color="link"
+        disabled={ldapLinked}
+        title={ldapLinked ? 'SSH keys are managed by LDAP' : ''}
+        on:click={() => {
+            if (ldapLinked) {
+                return
+            }
+            issuingPublicKey = true
+        }}
+    >Issue SSH key</Button>
 
     <Button size="sm" color="link" on:click={() => creatingOtp = true}>Add OTP</Button>
     <Button size="sm" color="link" on:click={() => {
@@ -342,8 +475,29 @@
                 <div class="main me-auto">
                     <div class="label d-flex align-items-center">
                         {credential.label}
+                        {#if credential.issuedByWarpgate}
+                            <span class="badge text-bg-info ms-2">Issued</span>
+                        {/if}
+                        {#if credential.revokedAt}
+                            <span class="badge text-bg-danger ms-2">Revoked</span>
+                        {/if}
                     </div>
                     <small class="d-block text-muted">{abbreviatePublicKey(credential.opensshPublicKey)}</small>
+                    {#if credential.issuedByWarpgate}
+                        <small class="d-block text-muted">
+                            {#if credential.expiresAt}
+                                Expires: {credential.expiresAt.toLocaleString()}
+                            {:else}
+                                Expires: never
+                            {/if}
+                            ·
+                            {#if credential.maxUses !== undefined}
+                                Uses left: {credential.usesLeft ?? 0} / {credential.maxUses}
+                            {:else}
+                                Uses: unlimited
+                            {/if}
+                        </small>
+                    {/if}
                 </div>
                 <CredentialUsedStateBadge credential={credential} />
             {/if}
@@ -374,7 +528,7 @@
             <Button
                 class="px-0"
                 color="link"
-                disabled={credential.kind === CredentialKind.PublicKey && (ldapLinked || !$adminPermissions.usersEdit)}
+                disabled={credential.kind === CredentialKind.PublicKey && (ldapLinked || !$adminPermissions.usersEdit || credential.issuedByWarpgate)}
                 onclick={e => {
                     if (credential.kind === CredentialKind.Sso) {
                         editingSsoCredentialInstance = credential
@@ -389,6 +543,19 @@
                 Change
             </Button>
             {/if}
+            {#if credential.kind === CredentialKind.PublicKey && credential.issuedByWarpgate && !credential.revokedAt}
+            <Button
+                class="px-0"
+                color="link"
+                disabled={ldapLinked || !$adminPermissions.usersEdit}
+                onclick={e => {
+                    revokeIssuedPublicKeyCredential(credential)
+                    e.preventDefault()
+                }}>
+                Revoke
+            </Button>
+            {/if}
+            {#if credential.kind !== CredentialKind.PublicKey || !credential.issuedByWarpgate}
             <Button
                 class="px-0"
                 color="link"
@@ -399,6 +566,7 @@
                 }}>
                 Delete
             </Button>
+            {/if}
         </div>
         {/each}
     </div>
@@ -454,6 +622,16 @@
     bind:isOpen={editingPublicKeyCredential}
     instance={editingPublicKeyCredentialInstance ?? undefined}
     save={savePublicKeyCredential}
+/>
+{/if}
+
+{#if issuingPublicKey}
+<IssuedPublicKeyModal
+    bind:isOpen={issuingPublicKey}
+    issue={issuePublicKeyCredential}
+    onClose={() => {
+        issuingPublicKey = false
+    }}
 />
 {/if}
 
