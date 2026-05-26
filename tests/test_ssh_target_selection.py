@@ -35,7 +35,7 @@ class Test:
                         kind="Ssh",
                         host="localhost",
                         port=ssh_port,
-                        username="root",
+                        username=processes.ssh_target_username,
                         auth=sdk.SSHTargetAuth(
                             sdk.SSHTargetAuthSshTargetPublicKeyAuth(kind="PublicKey")
                         ),

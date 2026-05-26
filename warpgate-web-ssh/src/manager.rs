@@ -19,7 +19,7 @@ use warpgate_protocol_ssh::known_hosts::KnownHosts;
 use warpgate_protocol_ssh::{RCCommand, RCEvent, RCState, RemoteClient};
 
 use crate::protocol::ServerMessage;
-use crate::session::{WebSshSession, WebSshSessionHandle};
+use crate::session::{WebSshSession, WebSshSessionHandle, WebSshSessionInit};
 
 const MAX_SESSIONS_PER_USER: usize = 100;
 
@@ -101,16 +101,16 @@ impl WebSshClientManager {
         let rc_handles = RemoteClient::create(session_id, services.clone())
             .context("creating SSH remote client")?;
 
-        let session = Arc::new(WebSshSession::new(
-            session_id,
+        let session = Arc::new(WebSshSession::new(WebSshSessionInit {
+            id: session_id,
             user_id,
-            target_name.to_owned(),
-            TargetKind::from(&target.options),
+            target_name: target_name.to_owned(),
+            target_kind: TargetKind::from(&target.options),
             server_handle,
-            rc_handles.command_tx.clone(),
-            rc_handles.abort_tx.clone(),
-            services.recordings.clone(),
-        ));
+            command_tx: rc_handles.command_tx.clone(),
+            abort_tx: rc_handles.abort_tx.clone(),
+            recordings: services.recordings.clone(),
+        }));
 
         tokio::spawn({
             let session = session.clone();

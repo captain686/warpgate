@@ -73,11 +73,10 @@ pub async fn ws_handler(
                         Some(Ok(Message::Text(text))) => {
                             if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text)
                                 && let Some(reply) = handle_client_message(&session, &db, client_msg).await
-                                && let Ok(json) = serde_json::to_string(&reply) {
-                                if sink.send(Message::Text(json)).await.is_err() {
-                                    break;
-                                }
-
+                                && let Ok(json) = serde_json::to_string(&reply)
+                                && sink.send(Message::Text(json)).await.is_err()
+                            {
+                                break;
                             }
                         }
                         Some(Ok(Message::Close(_))) | None => break,

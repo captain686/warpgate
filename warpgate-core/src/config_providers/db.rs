@@ -95,6 +95,11 @@ impl DatabaseConfigProvider {
                     date_added: Set(Some(OffsetDateTime::now_utc())),
                     last_used: Set(None),
                     label: Set("Public key synchronized from LDAP".to_string()),
+                    issued_by_warpgate: Set(false),
+                    expires_at: Set(None),
+                    max_uses: Set(None),
+                    uses_left: Set(None),
+                    revoked_at: Set(None),
                     ..entities::PublicKeyCredential::ActiveModel::from(UserPublicKeyCredential {
                         key: openssh_key.into(),
                     })
@@ -428,6 +433,7 @@ impl ConfigProvider for DatabaseConfigProvider {
             error!("Selected user not found: {}", username);
             return Ok(false);
         };
+        let user_id = user_model.id;
 
         // Sync SSH keys from LDAP if user is linked
         if matches!(client_credential, AuthCredential::PublicKey { .. })
@@ -456,16 +462,34 @@ impl ConfigProvider for DatabaseConfigProvider {
                     username = &user_details.username[..],
                     "Client key: {}", openssh_public_key
                 );
+                let credential = entities::PublicKeyCredential::Entity::find()
+                    .filter(entities::PublicKeyCredential::Column::UserId.eq(user_id))
+                    .filter(
+                        entities::PublicKeyCredential::Column::OpensshPublicKey
+                            .eq(openssh_public_key),
+                    )
+                    .one(&*db)
+                    .await?;
 
-                Ok(user_details
-                    .credentials
-                    .iter()
-                    .any(|credential| match credential {
-                        UserAuthCredential::PublicKey(UserPublicKeyCredential {
-                            key: user_key,
-                        }) => &openssh_public_key == user_key.expose_secret(),
-                        _ => false,
-                    }))
+                let Some(credential) = credential else {
+                    return Ok(false);
+                };
+
+                if credential.revoked_at.is_some() {
+                    return Ok(false);
+                }
+
+                if let Some(expiry) = credential.expires_at
+                    && expiry < OffsetDateTime::now_utc()
+                {
+                    return Ok(false);
+                }
+
+                if credential.uses_left.is_some_and(|uses| uses <= 0) {
+                    return Ok(false);
+                }
+
+                Ok(true)
             }
             AuthCredential::Password(client_password) => {
                 Ok(user_details
@@ -697,6 +721,7 @@ impl ConfigProvider for DatabaseConfigProvider {
 
     async fn update_public_key_last_used(
         &self,
+        username: &str,
         credential: Option<AuthCredential>,
     ) -> Result<(), WarpgateError> {
         let db = self.db.lock().await;
@@ -706,21 +731,23 @@ impl ConfigProvider for DatabaseConfigProvider {
             public_key_bytes,
         }) = credential
         else {
-            error!("Invalid or missing public key credential");
-            return Err(WarpgateError::InvalidCredentialType);
+            return Ok(());
         };
 
-        // Encode public key and match it against the database
         let base64_bytes = data_encoding::BASE64.encode(&public_key_bytes);
         let openssh_public_key = format!("{kind} {base64_bytes}");
 
-        debug!(
-            "Attempting to update last_used for public key: {}",
-            openssh_public_key
-        );
+        let Some(user_model) = entities::User::Entity::find()
+            .filter(entities::User::Column::Username.eq(username))
+            .one(&*db)
+            .await?
+        else {
+            warn!("Cannot update public key usage for unknown user: {username}");
+            return Ok(());
+        };
 
-        // Find the public key credential
         let public_key_credential = entities::PublicKeyCredential::Entity::find()
+            .filter(entities::PublicKeyCredential::Column::UserId.eq(user_model.id))
             .filter(
                 entities::PublicKeyCredential::Column::OpensshPublicKey
                     .eq(openssh_public_key.clone()),
@@ -736,10 +763,29 @@ impl ConfigProvider for DatabaseConfigProvider {
             return Ok(()); // Gracefully return if the key is not found
         };
 
-        // Update the `last_used` (last used) timestamp
+        let now = OffsetDateTime::now_utc();
+        if public_key_credential.revoked_at.is_some() {
+            return Ok(());
+        }
+        if let Some(expiry) = public_key_credential.expires_at
+            && expiry < now
+        {
+            return Ok(());
+        }
+
+        let next_uses_left = public_key_credential
+            .uses_left
+            .map(|uses_left| uses_left - 1);
+        if next_uses_left.is_some_and(|uses| uses < 0) {
+            return Ok(());
+        }
+
         let mut active_model: entities::PublicKeyCredential::ActiveModel =
             public_key_credential.into();
-        active_model.last_used = Set(Some(OffsetDateTime::now_utc()));
+        active_model.last_used = Set(Some(now));
+        if let Some(uses_left) = next_uses_left {
+            active_model.uses_left = Set(Some(uses_left));
+        }
 
         active_model.update(&*db).await.map_err(|e| {
             error!("Failed to update last_used for public key: {:?}", e);

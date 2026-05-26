@@ -594,6 +594,25 @@ impl Default for LogConfig {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone, Default, JsonSchema)]
+pub struct VaultConfig {
+    #[serde(default)]
+    pub local: LocalVaultConfig,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default, JsonSchema)]
+pub struct LocalVaultConfig {
+    #[serde(default = "_default_false")]
+    pub enable: bool,
+
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub master_key: Option<Secret<String>>,
+
+    #[serde(default)]
+    pub master_key_env: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone, JsonSchema)]
 pub struct WarpgateConfigStore {
     #[serde(default)]
@@ -625,6 +644,9 @@ pub struct WarpgateConfigStore {
     pub postgres: PostgresConfig,
 
     #[serde(default)]
+    pub vault: VaultConfig,
+
+    #[serde(default)]
     pub log: LogConfig,
 }
 
@@ -640,6 +662,7 @@ impl Default for WarpgateConfigStore {
             kubernetes: <_>::default(),
             mysql: <_>::default(),
             postgres: <_>::default(),
+            vault: <_>::default(),
             log: <_>::default(),
         }
     }

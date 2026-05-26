@@ -15,6 +15,11 @@ pub struct Model {
     pub label: String,
     pub date_added: Option<OffsetDateTime>,
     pub last_used: Option<OffsetDateTime>,
+    pub issued_by_warpgate: bool,
+    pub expires_at: Option<OffsetDateTime>,
+    pub max_uses: Option<i64>,
+    pub uses_left: Option<i64>,
+    pub revoked_at: Option<OffsetDateTime>,
     #[sea_orm(column_type = "Text")]
     pub openssh_public_key: String,
 }

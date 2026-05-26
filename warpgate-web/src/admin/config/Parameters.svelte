@@ -118,7 +118,22 @@
                         update()
                     }}
                     checked={parameters.sshClientAuthKeyboardInteractive} />
-                <div>Keyboard-interactive authentication (OTP, 2FA prompts)</div>
+                <div>Keyboard-interactive authentication (interactive challenges)</div>
+            </label>
+            <label
+                for="sshClientAuthOtp"
+                class="d-flex align-items-center mt-2"
+            >
+                <Input
+                    id="sshClientAuthOtp"
+                    class="mb-0 me-2"
+                    type="switch"
+                    on:change={() => {
+                        parameters!.sshClientAuthOtp = !parameters!.sshClientAuthOtp
+                        update()
+                    }}
+                    checked={parameters.sshClientAuthOtp} />
+                <div>One-time password (OTP) via keyboard-interactive</div>
             </label>
             <InfoBox class="mt-3 mb-3">
                 Controls which authentication methods are offered to SSH clients.
@@ -245,6 +260,37 @@
             <InfoBox class="mt-3 mb-3">
                 Warpgate can inject a session menu into HTTP sessions, allowing users to log out or return back to the home page.
             </InfoBox>
+
+            <h4 class="mt-4">Logs</h4>
+            <FormGroup floating label="Log retention strategy">
+                <select
+                    class="form-control"
+                    bind:value={parameters.logRetentionStrategy}
+                    onchange={update}
+                >
+                    <option value="max_age">Maximum age</option>
+                    <option value="max_size">Maximum size</option>
+                </select>
+            </FormGroup>
+
+            {#if parameters.logRetentionStrategy === 'max_size'}
+            <FormGroup floating label="Max log size (MiB)">
+                <input
+                    type="number"
+                    min="1"
+                    class="form-control"
+                    value={parameters.logMaxSizeMegabytes ?? ''}
+                    onchange={e => {
+                        const parsed = parseInt(e.currentTarget.value)
+                        parameters!.logMaxSizeMegabytes = isNaN(parsed) ? undefined : parsed
+                        update()
+                    }}
+                />
+            </FormGroup>
+            <InfoBox class="mt-3 mb-3">
+                Non-audit logs are pruned oldest-first when the configured size limit is exceeded.
+            </InfoBox>
+            {/if}
 
             {#if hasSsoProviders}
             <h4 class="mt-4">Login</h4>

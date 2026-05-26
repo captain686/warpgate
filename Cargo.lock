@@ -7316,6 +7316,7 @@ dependencies = [
 name = "warpgate-core"
 version = "0.23.4"
 dependencies = [
+ "aes-gcm 0.10.3",
  "anyhow",
  "argon2",
  "async-trait",
@@ -7340,6 +7341,7 @@ dependencies = [
  "sea-orm",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.18",
  "time",
  "tokio",

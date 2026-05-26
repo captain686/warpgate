@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Warpgate Web Admin",
-    "version": "v0.23.4-21-ge437f0a5-modified"
+    "version": "v0.23.4-50-g844c0e5-modified"
   },
   "servers": [
     {
@@ -2992,6 +2992,67 @@
         "operationId": "create_public_key_credential"
       }
     },
+    "/users/{user_id}/credentials/public-keys/issue": {
+      "post": {
+        "parameters": [
+          {
+            "name": "user_id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json; charset=utf-8": {
+              "schema": {
+                "$ref": "#/components/schemas/IssuePublicKeyCredentialRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedPublicKeyCredential"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "issue_public_key_credential"
+      }
+    },
     "/users/{user_id}/credentials/public-keys/{id}": {
       "put": {
         "parameters": [
@@ -3115,6 +3176,61 @@
           }
         ],
         "operationId": "delete_public_key_credential"
+      }
+    },
+    "/users/{user_id}/credentials/public-keys/{id}/revoke": {
+      "post": {
+        "parameters": [
+          {
+            "name": "user_id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          },
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "revoke_public_key_credential"
       }
     },
     "/users/{user_id}/credentials/otp": {
@@ -4469,7 +4585,8 @@
         "required": [
           "id",
           "label",
-          "openssh_public_key"
+          "openssh_public_key",
+          "issued_by_warpgate"
         ],
         "properties": {
           "id": {
@@ -4489,6 +4606,25 @@
           },
           "openssh_public_key": {
             "type": "string"
+          },
+          "issued_by_warpgate": {
+            "type": "boolean"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "max_uses": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "uses_left": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "revoked_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -4586,6 +4722,29 @@
           }
         }
       },
+      "IssuePublicKeyCredentialRequest": {
+        "type": "object",
+        "title": "IssuePublicKeyCredentialRequest",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "valid_for_seconds": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "max_uses": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "algorithm": {
+            "$ref": "#/components/schemas/IssuedPublicKeyAlgorithm"
+          }
+        }
+      },
       "IssuedCertificateCredential": {
         "type": "object",
         "title": "IssuedCertificateCredential",
@@ -4598,6 +4757,29 @@
             "$ref": "#/components/schemas/ExistingCertificateCredential"
           },
           "certificate_pem": {
+            "type": "string"
+          }
+        }
+      },
+      "IssuedPublicKeyAlgorithm": {
+        "type": "string",
+        "enum": [
+          "ed25519",
+          "rsa_sha512"
+        ]
+      },
+      "IssuedPublicKeyCredential": {
+        "type": "object",
+        "title": "IssuedPublicKeyCredential",
+        "required": [
+          "credential",
+          "private_key_openssh"
+        ],
+        "properties": {
+          "credential": {
+            "$ref": "#/components/schemas/ExistingPublicKeyCredential"
+          },
+          "private_key_openssh": {
             "type": "string"
           }
         }
@@ -4901,6 +5083,14 @@
           }
         }
       },
+      "LogRetentionStrategy": {
+        "type": "string",
+        "description": "Log cleanup strategy used by the periodic database cleanup task.",
+        "enum": [
+          "max_age",
+          "max_size"
+        ]
+      },
       "NewOtpCredential": {
         "type": "object",
         "title": "NewOtpCredential",
@@ -5008,6 +5198,9 @@
           "ssh_client_auth_keyboard_interactive": {
             "type": "boolean"
           },
+          "ssh_client_auth_otp": {
+            "type": "boolean"
+          },
           "minimize_password_login": {
             "type": "boolean"
           },
@@ -5033,6 +5226,13 @@
           },
           "show_session_menu": {
             "type": "boolean"
+          },
+          "log_retention_strategy": {
+            "$ref": "#/components/schemas/LogRetentionStrategy"
+          },
+          "log_max_size_megabytes": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -5044,12 +5244,14 @@
           "ssh_client_auth_publickey",
           "ssh_client_auth_password",
           "ssh_client_auth_keyboard_interactive",
+          "ssh_client_auth_otp",
           "minimize_password_login",
           "ticket_self_service_enabled",
           "ticket_auto_approve_existing_access",
           "ticket_require_description",
           "ticket_request_show_all_targets",
-          "show_session_menu"
+          "show_session_menu",
+          "log_retention_strategy"
         ],
         "properties": {
           "allow_own_credential_management": {
@@ -5068,6 +5270,9 @@
           "ssh_client_auth_keyboard_interactive": {
             "type": "boolean"
           },
+          "ssh_client_auth_otp": {
+            "type": "boolean"
+          },
           "minimize_password_login": {
             "type": "boolean"
           },
@@ -5093,6 +5298,13 @@
           },
           "show_session_menu": {
             "type": "boolean"
+          },
+          "log_retention_strategy": {
+            "$ref": "#/components/schemas/LogRetentionStrategy"
+          },
+          "log_max_size_megabytes": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },

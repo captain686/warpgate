@@ -16,6 +16,7 @@ pub struct Model {
     pub ssh_client_auth_publickey: bool,
     pub ssh_client_auth_password: bool,
     pub ssh_client_auth_keyboard_interactive: bool,
+    pub ssh_client_auth_otp: bool,
     pub minimize_password_login: bool,
     pub ticket_self_service_enabled: bool,
     pub ticket_auto_approve_existing_access: bool,
@@ -24,6 +25,10 @@ pub struct Model {
     pub ticket_require_description: bool,
     pub ticket_request_show_all_targets: bool,
     pub show_session_menu: bool,
+    /// Global log retention strategy. Supported values: `max_age`, `max_size`.
+    pub log_retention_strategy: String,
+    /// Maximum total size of non-audit logs in MiB when `log_retention_strategy = max_size`.
+    pub log_max_size_megabytes: Option<i64>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}
@@ -45,6 +50,7 @@ impl Entity {
                     ssh_client_auth_publickey: Set(true),
                     ssh_client_auth_password: Set(true),
                     ssh_client_auth_keyboard_interactive: Set(true),
+                    ssh_client_auth_otp: Set(true),
                     minimize_password_login: Set(false),
                     ticket_self_service_enabled: Set(false),
                     ticket_auto_approve_existing_access: Set(true),
@@ -53,6 +59,8 @@ impl Entity {
                     ticket_require_description: Set(false),
                     ticket_request_show_all_targets: Set(false),
                     show_session_menu: Set(true),
+                    log_retention_strategy: Set("max_age".to_owned()),
+                    log_max_size_megabytes: Set(None),
                 }
                 .insert(db)
                 .await

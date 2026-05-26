@@ -111,6 +111,15 @@ impl AuthState {
         self.maybe_update_verification_state();
     }
 
+    pub fn valid_public_key_credential(&self) -> Option<AuthCredential> {
+        self.valid_credentials
+            .iter()
+            .find_map(|credential| match credential {
+                AuthCredential::PublicKey { .. } => Some(credential.clone()),
+                _ => None,
+            })
+    }
+
     pub const fn reject(&mut self) {
         self.force_rejected = true;
     }

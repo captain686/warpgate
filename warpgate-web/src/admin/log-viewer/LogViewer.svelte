@@ -32,6 +32,7 @@ let { filters }: Props = $props()
 const MAX_LOGS = 500
 const POLL_INTERVAL_MS = 3000
 const PAGE_SIZE = 500
+const SEARCH_DEBOUNCE_MS = 300
 
 let error: string|null = $state(null)
 let items: LogEntry[]|undefined
@@ -39,7 +40,10 @@ let visibleItems: LogEntry[]|undefined = $state()
 let loading = $state(true)
 let endReached = $state(false)
 let loadOlderButton: HTMLButtonElement|undefined = $state()
-let reloadInterval: ReturnType<typeof setInterval>
+let reloadInterval: ReturnType<typeof setInterval>|undefined
+let searchDebounceTimeout: ReturnType<typeof setTimeout>|undefined
+let queuedSearch = false
+let pendingRequestId = 0
 let searchQuery = $state('')
 let scrollEl: HTMLDivElement|undefined = $state()
 
@@ -97,6 +101,7 @@ function addItems (newItems: LogEntry[]) {
 }
 
 async function loadNewer () {
+    const requestId = ++pendingRequestId
     loading = true
     try {
         const getLogsRequest: GetLogsRequest = {
@@ -107,10 +112,20 @@ async function loadNewer () {
         }
 
         const newItems = await api.getLogs({ getLogsRequest })
+        if (requestId !== pendingRequestId) {
+            return
+        }
+
         addItems(newItems)
         visibleItems = items
     } finally {
-        loading = false
+        if (requestId === pendingRequestId) {
+            loading = false
+            if (queuedSearch) {
+                queuedSearch = false
+                void loadOlder(true)
+            }
+        }
     }
 }
 
@@ -118,6 +133,7 @@ async function loadOlder (searchMode = false) {
     if (endReached && !searchMode) {
         return
     }
+    const requestId = ++pendingRequestId
     loading = true
     try {
         const getLogsRequest: GetLogsRequest = {
@@ -128,6 +144,10 @@ async function loadOlder (searchMode = false) {
         }
 
         const newItems = await api.getLogs({ getLogsRequest })
+        if (requestId !== pendingRequestId) {
+            return
+        }
+
         if (searchMode) {
             endReached = false
             items = []
@@ -143,7 +163,9 @@ async function loadOlder (searchMode = false) {
             endReached = true
         }
     } finally {
-        loading = false
+        if (requestId === pendingRequestId) {
+            loading = false
+        }
     }
 }
 
@@ -159,27 +181,48 @@ async function clearAndReload () {
 }
 
 function search () {
-    loadOlder(true)
+    if (searchDebounceTimeout) {
+        clearTimeout(searchDebounceTimeout)
+    }
+
+    searchDebounceTimeout = setTimeout(() => {
+        searchDebounceTimeout = undefined
+        if (loading) {
+            queuedSearch = true
+        } else {
+            void loadOlder(true)
+        }
+    }, SEARCH_DEBOUNCE_MS)
 }
 
 function stringifyDate (date: Date) {
     return date.toLocaleString()
 }
 
-loadOlder().catch(async e => {
+void loadOlder().catch(async e => {
     error = await stringifyError(e)
 })
 
 onMount(() => {
+    if (reloadInterval) {
+        clearInterval(reloadInterval)
+    }
     reloadInterval = setInterval(() => {
         if (!loading) {
-            loadNewer()
+            void loadNewer()
         }
     }, POLL_INTERVAL_MS)
 })
 
 onDestroy(() => {
-    clearInterval(reloadInterval)
+    if (reloadInterval) {
+        clearInterval(reloadInterval)
+        reloadInterval = undefined
+    }
+    if (searchDebounceTimeout) {
+        clearTimeout(searchDebounceTimeout)
+        searchDebounceTimeout = undefined
+    }
 })
 
 interface AccessRoleGranted1 {
@@ -319,7 +362,7 @@ function parseRichLogEntry(entry: LogEntry): RichLogEntry | null {
         class="form-control form-control-sm flex-grow-1"
         style="min-width: 12rem"
         bind:value={searchQuery}
-        onkeyup={() => search()} />
+        oninput={search} />
     <AsyncButton
     id = "clearAndReloadButton"
         color="link"
@@ -492,13 +535,13 @@ function parseRichLogEntry(entry: LogEntry): RichLogEntry | null {
                     <div class="load-older-footer">
                         <IntersectionObserver element={loadOlderButton} on:observe={event => {
                             if (!loading && !error && event.detail.isIntersecting && !endReached) {
-                                loadOlder()
+                                void loadOlder()
                             }
                         }}>
                             <button
                                 bind:this={loadOlderButton}
                                 class="btn btn-secondary"
-                                onclick={() => loadOlder()}
+                                onclick={() => void loadOlder()}
                                 disabled={loading}
                             >
                                 Load older

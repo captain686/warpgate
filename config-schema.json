@@ -97,6 +97,16 @@
       "items": {
         "$ref": "#/$defs/SsoProviderConfig"
       }
+    },
+    "vault": {
+      "$ref": "#/$defs/VaultConfig",
+      "default": {
+        "local": {
+          "enable": false,
+          "master_key": null,
+          "master_key_env": null
+        }
+      }
     }
   },
   "$defs": {
@@ -216,6 +226,29 @@
     },
     "ListenEndpoint": {
       "type": "string"
+    },
+    "LocalVaultConfig": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": false
+        },
+        "master_key": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "master_key_env": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      }
     },
     "LogConfig": {
       "type": "object",
@@ -652,6 +685,19 @@
         "@",
         "_"
       ]
+    },
+    "VaultConfig": {
+      "type": "object",
+      "properties": {
+        "local": {
+          "$ref": "#/$defs/LocalVaultConfig",
+          "default": {
+            "enable": false,
+            "master_key": null,
+            "master_key_env": null
+          }
+        }
+      }
     }
   }
 }

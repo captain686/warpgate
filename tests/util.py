@@ -1,10 +1,15 @@
 import logging
 import os
+from pathlib import Path
 import requests
 import socket
 import subprocess
+import tempfile
 import threading
 import time
+import typing
+
+import paramiko
 
 
 last_port = 1234
@@ -101,3 +106,113 @@ def create_ticket(url, username, target_name):
     )
     assert response.status_code == 201
     return response.json()["secret"]
+
+
+def _load_private_key(key_path: str | Path) -> paramiko.PKey:
+    key_path = str(key_path)
+    loaders: list[typing.Callable[[str], paramiko.PKey]] = [
+        paramiko.Ed25519Key.from_private_key_file,
+        paramiko.RSAKey.from_private_key_file,
+        paramiko.ECDSAKey.from_private_key_file,
+    ]
+    dss_key = getattr(paramiko, "DSSKey", None)
+    if dss_key is not None:
+        loaders.append(dss_key.from_private_key_file)
+    last_error: Exception | None = None
+    for loader in loaders:
+        try:
+            return loader(key_path)
+        except Exception as error:  # noqa: BLE001
+            last_error = error
+    raise paramiko.SSHException(
+        f"Could not load SSH private key from {key_path}: {last_error}"
+    )
+
+
+def ssh_exec_command_with_public_key(
+    host: str,
+    port: int,
+    username: str,
+    private_key_path: str | Path,
+    command: str,
+    *,
+    timeout: float = 10.0,
+    otp_code: str | None = None,
+) -> tuple[int, bytes, bytes]:
+    """Execute command through OpenSSH client using pubkey and optional OTP.
+
+    Uses the local `ssh` binary to avoid `expect`/`sshpass` runtime dependencies
+    while still supporting keyboard-interactive OTP prompts.
+    """
+    private_key_path = str(private_key_path)
+    ssh_args = [
+        "ssh",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "LogLevel=ERROR",
+        "-o",
+        "PreferredAuthentications=publickey,keyboard-interactive",
+        "-o",
+        "NumberOfPasswordPrompts=1",
+        "-o",
+        f"IdentityFile={private_key_path}",
+        "-p",
+        str(port),
+        f"{username}@{host}",
+        command,
+    ]
+
+    askpass_path: Path | None = None
+    env = os.environ.copy()
+    if otp_code is not None:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            prefix="warpgate-ssh-askpass-",
+            suffix=".sh",
+            delete=False,
+        ) as askpass_file:
+            askpass_file.write("#!/bin/sh\nprintf '%s\\n' \"$WARPGATE_TEST_SSHPASS\"\n")
+            askpass_path = Path(askpass_file.name)
+        askpass_path.chmod(0o700)
+        env.update(
+            {
+                "WARPGATE_TEST_SSHPASS": otp_code,
+                "SSH_ASKPASS": str(askpass_path),
+                "SSH_ASKPASS_REQUIRE": "force",
+                "DISPLAY": "warpgate-test:0",
+            }
+        )
+
+    process = subprocess.Popen(
+        ssh_args,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        process.kill()
+        stdout, stderr = process.communicate()
+        raise paramiko.AuthenticationException(
+            stderr.decode(errors="replace")
+            or "SSH authentication timed out"
+        ) from error
+    finally:
+        if askpass_path is not None:
+            askpass_path.unlink(missing_ok=True)
+
+    status = process.returncode
+    if status != 0:
+        raise paramiko.AuthenticationException(
+            stderr.decode(errors="replace") or f"SSH command failed with exit code {status}"
+        )
+
+    return status, stdout, stderr

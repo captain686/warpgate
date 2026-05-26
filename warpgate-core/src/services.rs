@@ -9,6 +9,7 @@ use warpgate_common::{GlobalParams, WarpgateConfig};
 use crate::db::{connect_to_db, populate_db};
 use crate::rate_limiting::RateLimiterRegistry;
 use crate::recordings::SessionRecordings;
+use crate::vault::VaultService;
 use crate::{AuthStateStore, ConfigProviderEnum, DatabaseConfigProvider, State};
 
 #[derive(Clone)]
@@ -22,6 +23,7 @@ pub struct Services {
     pub admin_token: Arc<Mutex<Option<String>>>,
     pub rate_limiter_registry: Arc<Mutex<RateLimiterRegistry>>,
     pub global_params: Arc<GlobalParams>,
+    pub vault: Arc<VaultService>,
 }
 
 impl Services {
@@ -33,6 +35,8 @@ impl Services {
         let db = connect_to_db(&config, &params).await?;
         populate_db(&db, &mut config).await?;
         let db = Arc::new(Mutex::new(db));
+
+        let vault = Arc::new(VaultService::new(db.clone(), &config)?);
 
         let recordings = SessionRecordings::new(db.clone(), &config, &params)?;
         let recordings = Arc::new(Mutex::new(recordings));
@@ -67,6 +71,7 @@ impl Services {
             auth_state_store,
             admin_token: Arc::new(Mutex::new(admin_token)),
             global_params: Arc::new(params),
+            vault,
         })
     }
 }

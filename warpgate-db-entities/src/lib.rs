@@ -23,3 +23,5 @@ pub mod TicketRequest;
 pub mod User;
 pub mod UserAdminRoleAssignment;
 pub mod UserRoleAssignment;
+pub mod VaultAccessEvent;
+pub mod VaultItem;

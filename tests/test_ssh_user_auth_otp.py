@@ -1,14 +1,13 @@
-from asyncio import subprocess
 from base64 import b64decode
 from uuid import uuid4
+import paramiko
 import pyotp
 import pytest
 from pathlib import Path
-from textwrap import dedent
 
 from .api_client import admin_client, sdk
 from .conftest import ProcessManager, WarpgateProcess
-from .util import wait_port
+from .util import ssh_exec_command_with_public_key, wait_port
 
 
 class Test:
@@ -64,7 +63,7 @@ class Test:
                             kind="Ssh",
                             host="localhost",
                             port=ssh_port,
-                            username="root",
+                            username=processes.ssh_target_username,
                             auth=sdk.SSHTargetAuth(
                                 sdk.SSHTargetAuthSshTargetPublicKeyAuth(
                                     kind="PublicKey"
@@ -77,55 +76,25 @@ class Test:
             api.add_target_role(ssh_target.id, role.id)
 
         totp = pyotp.TOTP(otp_key_base32)
-
-        script = dedent(
-            f"""
-            set timeout {timeout - 5}
-
-            spawn ssh {user.username}:{ssh_target.name}@localhost -p {shared_wg.ssh_port} -o StrictHostKeychecking=no -o UserKnownHostsFile=/dev/null  -o IdentitiesOnly=yes -o IdentityFile=ssh-keys/id_ed25519 -o PreferredAuthentications=publickey,keyboard-interactive ls /bin/sh
-
-            expect "Two-factor authentication"
-            sleep 0.5
-            send "{totp.now()}\\r"
-
-            expect {{
-                "/bin/sh"  {{ exit 0; }}
-                eof {{ exit 1; }}
-            }}
-            """
+        status, stdout, _stderr = ssh_exec_command_with_public_key(
+            "localhost",
+            shared_wg.ssh_port,
+            f"{user.username}:{ssh_target.name}",
+            "ssh-keys/id_ed25519",
+            "ls /bin/sh",
+            timeout=float(timeout),
+            otp_code=totp.now(),
         )
+        assert status == 0
+        assert stdout == b"/bin/sh\n"
 
-        ssh_client = processes.start(
-            ["expect"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-
-        output, stderr = ssh_client.communicate(script.encode(), timeout=timeout)
-        assert ssh_client.returncode == 0, output + stderr
-
-        script = dedent(
-            f"""
-            set timeout {timeout - 5}
-
-            spawn ssh {user.username}:{ssh_target.name}@localhost -p {[shared_wg.ssh_port]} -o StrictHostKeychecking=no -o UserKnownHostsFile=/dev/null  -o IdentitiesOnly=yes -o IdentityFile=ssh-keys/id_ed25519 -o PreferredAuthentications=publickey,keyboard-interactive ls /bin/sh
-
-            expect "Two-factor authentication"
-            sleep 0.5
-            send "12345678\\r"
-
-            expect {{
-                "/bin/sh"  {{ exit 0; }}
-                "Two-factor authentication" {{ exit 1; }}
-                eof {{ exit 1; }}
-            }}
-            """
-        )
-
-        ssh_client = processes.start(
-            ["expect"], stdin=subprocess.PIPE, stdout=subprocess.PIPE
-        )
-
-        output = ssh_client.communicate(script.encode(), timeout=timeout)[0]
-        assert ssh_client.returncode != 0, output
+        with pytest.raises(paramiko.AuthenticationException):
+            ssh_exec_command_with_public_key(
+                "localhost",
+                shared_wg.ssh_port,
+                f"{user.username}:{ssh_target.name}",
+                "ssh-keys/id_ed25519",
+                "ls /bin/sh",
+                timeout=float(timeout),
+                otp_code="12345678",
+            )

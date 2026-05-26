@@ -40,7 +40,6 @@ use super::russh_handler::ServerHandlerEvent;
 use super::service_output::{ServiceOutput, ansi_paint};
 use super::session_handle::SessionHandleCommand;
 use crate::compat::ContextExt;
-use crate::server::get_allowed_auth_methods;
 use crate::server::service_output::ERASE_PROGRESS_SPINNER;
 use crate::{
     ChannelOperation, ConnectionError, DirectTCPIPParams, PtyRequest, RCCommand, RCCommandReply,
@@ -109,6 +108,7 @@ pub struct ServerSession {
     keyboard_interactive_state: KeyboardInteractiveState,
     cached_successful_ticket_auth: Option<CachedSuccessfulTicketAuth>,
     allowed_auth_methods: MethodSet,
+    otp_auth_enabled: bool,
 }
 
 fn session_debug_tag(id: &SessionId, remote_address: &SocketAddr) -> String {
@@ -128,6 +128,8 @@ impl ServerSession {
         server_handle: Arc<Mutex<WarpgateServerHandle>>,
         mut session_handle_rx: UnboundedReceiver<SessionHandleCommand>,
         mut handler_event_rx: UnboundedReceiver<ServerHandlerEvent>,
+        allowed_auth_methods: MethodSet,
+        otp_auth_enabled: bool,
     ) -> Result<impl Future<Output = Result<()>> + use<>> {
         let id = server_handle.lock().await.id();
 
@@ -167,7 +169,8 @@ impl ServerSession {
             auth_state: None,
             keyboard_interactive_state: KeyboardInteractiveState::None,
             cached_successful_ticket_auth: None,
-            allowed_auth_methods: get_allowed_auth_methods(services).await?,
+            allowed_auth_methods,
+            otp_auth_enabled,
         };
 
         let mut so_rx = this.service_output.subscribe();
@@ -261,12 +264,7 @@ impl ServerSession {
                     Some(&self.id),
                     username,
                     crate::PROTOCOL_NAME,
-                    &[
-                        CredentialKind::Password,
-                        CredentialKind::PublicKey,
-                        CredentialKind::Totp,
-                        CredentialKind::WebUserApproval,
-                    ],
+                    &self.supported_credential_types_for_session(),
                     Some(self.remote_address.ip()),
                 )
                 .await?
@@ -275,6 +273,28 @@ impl ServerSession {
         }
         #[allow(clippy::unwrap_used)]
         Ok(self.auth_state.clone().unwrap())
+    }
+
+    fn supported_credential_types_for_session(&self) -> Vec<CredentialKind> {
+        let mut kinds = Vec::new();
+
+        if self.allowed_auth_methods.contains(&MethodKind::Password) {
+            kinds.push(CredentialKind::Password);
+        }
+        if self.allowed_auth_methods.contains(&MethodKind::PublicKey) {
+            kinds.push(CredentialKind::PublicKey);
+        }
+        if self
+            .allowed_auth_methods
+            .contains(&MethodKind::KeyboardInteractive)
+        {
+            if self.otp_auth_enabled {
+                kinds.push(CredentialKind::Totp);
+            }
+            kinds.push(CredentialKind::WebUserApproval);
+        }
+
+        kinds
     }
 
     pub fn make_logging_span(&self) -> tracing::Span {
@@ -1398,7 +1418,7 @@ impl ServerSession {
         match self.try_auth_lazy(&selector, None).await {
             Ok(AuthResult::Need(kinds)) => russh::server::Auth::Reject {
                 proceed_with_methods: Some(self.get_remaining_auth_methods(kinds)),
-                partial_success: false,
+                partial_success: true,
             },
             _ => russh::server::Auth::reject(),
         }
@@ -1429,27 +1449,14 @@ impl ServerSession {
         let result = self.try_auth_lazy(&selector, key.clone()).await;
 
         match result {
-            Ok(AuthResult::Accepted { .. }) => {
-                // Update last_used timestamp
-                if let Err(err) = self
-                    .services
-                    .config_provider
-                    .lock()
-                    .await
-                    .update_public_key_last_used(key.clone())
-                    .await
-                {
-                    warn!(?err, "Failed to update last_used for public key");
-                }
-                russh::server::Auth::Accept
-            }
+            Ok(AuthResult::Accepted { .. }) => russh::server::Auth::Accept,
             Ok(AuthResult::Rejected) => russh::server::Auth::Reject {
                 proceed_with_methods: Some(MethodSet::all()),
                 partial_success: false,
             },
             Ok(AuthResult::Need(kinds)) => russh::server::Auth::Reject {
                 proceed_with_methods: Some(self.get_remaining_auth_methods(kinds)),
-                partial_success: false,
+                partial_success: true,
             },
             Err(error) => {
                 error!(?error, "Failed to verify credentials");
@@ -1531,7 +1538,7 @@ impl ServerSession {
             Ok(AuthResult::Accepted { .. }) => russh::server::Auth::Accept,
             Ok(AuthResult::Rejected) => russh::server::Auth::reject(),
             Ok(AuthResult::Need(kinds)) => {
-                if kinds.contains(&CredentialKind::Totp) {
+                if self.otp_auth_enabled && kinds.contains(&CredentialKind::Totp) {
                     self.keyboard_interactive_state = KeyboardInteractiveState::OtpRequested;
                     russh::server::Auth::Partial {
                         name: Cow::Borrowed("Two-factor authentication"),
@@ -1612,26 +1619,39 @@ impl ServerSession {
 
     fn get_remaining_auth_methods(&self, kinds: HashSet<CredentialKind>) -> MethodSet {
         let mut m = MethodSet::empty();
+        let mut requires_keyboard_interactive = false;
 
         for cred_kind in kinds {
             let method_kind = match cred_kind {
-                CredentialKind::Password => MethodKind::Password,
-                CredentialKind::Totp | CredentialKind::WebUserApproval | CredentialKind::Sso => {
-                    MethodKind::KeyboardInteractive
+                CredentialKind::Password => Some(MethodKind::Password),
+                CredentialKind::Totp if self.otp_auth_enabled => {
+                    requires_keyboard_interactive = true;
+                    None
                 }
-                CredentialKind::PublicKey => MethodKind::PublicKey,
+                CredentialKind::Totp => None,
+                CredentialKind::WebUserApproval | CredentialKind::Sso => {
+                    requires_keyboard_interactive = true;
+                    None
+                }
+                CredentialKind::PublicKey => Some(MethodKind::PublicKey),
                 CredentialKind::Certificate => {
                     // Certificate authentication is not supported for SSH protocol
                     // This credential type is primarily for Kubernetes
                     continue;
                 }
             };
-            if self.allowed_auth_methods.contains(&method_kind) {
+            if let Some(method_kind) = method_kind
+                && self.allowed_auth_methods.contains(&method_kind)
+            {
                 m.push(method_kind);
             }
         }
 
-        if m.contains(&MethodKind::KeyboardInteractive) {
+        if requires_keyboard_interactive
+            && self
+                .allowed_auth_methods
+                .contains(&MethodKind::KeyboardInteractive)
+        {
             // Ensure keyboard-interactive is always the last method
             m.push(MethodKind::KeyboardInteractive);
         }
@@ -1722,6 +1742,8 @@ impl ServerSession {
 
                 match user_auth_result {
                     AuthResult::Accepted { user_info } => {
+                        let matched_public_key_credential = state.valid_public_key_credential();
+
                         self.services
                             .auth_state_store
                             .lock()
@@ -1743,6 +1765,22 @@ impl ServerSession {
                             );
                             return Ok(AuthResult::Rejected);
                         }
+
+                        if let Err(err) = self
+                            .services
+                            .config_provider
+                            .lock()
+                            .await
+                            .update_public_key_last_used(
+                                username,
+                                matched_public_key_credential.clone(),
+                            )
+                            .await
+                        {
+                            warn!(?err, "Failed to update public key usage");
+                            return Ok(AuthResult::Rejected);
+                        }
+
                         self._auth_accept(user_info.clone(), target_name).await?;
                         Ok(AuthResult::Accepted { user_info })
                     }

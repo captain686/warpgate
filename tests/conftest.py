@@ -11,6 +11,7 @@ import tempfile
 import urllib3
 import uuid
 import base64
+import getpass
 
 # cryptography is used to generate client certificates/CSRs locally
 from cryptography import x509
@@ -36,6 +37,23 @@ binary_path = (
     if enable_coverage
     else "target/debug/warpgate"
 )
+
+
+def _default_ssh_target_username() -> str:
+    """Resolve the username used by SSH target fixtures.
+
+    Docker-backed SSH fixtures run as root. Local sshd fallback runs as the
+    current user unless overridden.
+    """
+    return os.getenv(
+        "WARPGATE_TEST_SSH_TARGET_USER",
+        "root" if shutil.which("docker") else getpass.getuser(),
+    )
+
+
+SSH_TARGET_USERNAME = _default_ssh_target_username()
+HAS_EXPECT = shutil.which("expect") is not None
+HAS_SSHPASS = shutil.which("sshpass") is not None
 
 
 @dataclass
@@ -94,6 +112,20 @@ class ProcessManager:
         self.children = []
         self.ctx = ctx
         self.timeout = timeout
+        self._docker_bin = shutil.which("docker")
+        self._sshd_bin = shutil.which("sshd")
+        self._sshpass_bin = shutil.which("sshpass")
+        self._ssh_target_username = SSH_TARGET_USERNAME
+
+    @property
+    def ssh_target_username(self) -> str:
+        """Username used by test SSH targets for target-side authentication."""
+        return self._ssh_target_username
+
+    @property
+    def using_local_ssh_target(self) -> bool:
+        """Whether SSH target fixtures are backed by local sshd (not Docker)."""
+        return self._docker_bin is None
 
     def stop(self):
         for child in self.children:
@@ -120,7 +152,13 @@ class ProcessManager:
                         pass
                 p.kill()
 
-    def start_ssh_server(self, trusted_keys=[], extra_config=""):
+    def start_ssh_server(self, trusted_keys=None, extra_config=""):
+        trusted_keys = trusted_keys or []
+        if self._docker_bin:
+            return self._start_ssh_server_docker(trusted_keys, extra_config)
+        return self._start_ssh_server_local(trusted_keys, extra_config)
+
+    def _start_ssh_server_docker(self, trusted_keys: List[str], extra_config: str):
         port = alloc_port()
         data_dir = self.ctx.tmpdir / f"sshd-{uuid.uuid4()}"
         data_dir.mkdir(parents=True)
@@ -140,6 +178,7 @@ class ProcessManager:
                 PermitTunnel yes
                 StrictModes no
                 PermitRootLogin yes
+                AllowUsers root
                 HostKey /ssh-keys/id_ed25519
                 Subsystem	sftp	/usr/lib/ssh/sftp-server
                 LogLevel DEBUG3
@@ -153,7 +192,7 @@ class ProcessManager:
 
         self.start(
             [
-                "docker",
+                self._docker_bin,
                 "run",
                 "--rm",
                 "-p",
@@ -168,6 +207,78 @@ class ProcessManager:
             ]
         )
         return port
+
+    def _start_ssh_server_local(self, trusted_keys: List[str], extra_config: str):
+        if not self._sshd_bin:
+            raise RuntimeError(
+                "Neither Docker nor local sshd is available for SSH target test setup"
+            )
+
+        port = alloc_port()
+        data_dir = self.ctx.tmpdir / f"sshd-local-{uuid.uuid4()}"
+        data_dir.mkdir(parents=True)
+        authorized_keys_path = data_dir / "authorized_keys"
+        authorized_keys_path.write_text("\n".join(trusted_keys))
+        config_path = data_dir / "sshd_config"
+        host_key_path = Path(os.getcwd()) / "ssh-keys" / "id_ed25519"
+        sftp_subsystem_path = self._resolve_sftp_subsystem_path()
+        config_path.write_text(
+            dedent(
+                f"""\
+                Port {port}
+                ListenAddress 127.0.0.1
+                AuthorizedKeysFile {authorized_keys_path}
+                AllowAgentForwarding yes
+                AllowTcpForwarding yes
+                GatewayPorts yes
+                X11Forwarding yes
+                UseDNS no
+                PermitTunnel yes
+                StrictModes no
+                UsePAM no
+                PasswordAuthentication no
+                KbdInteractiveAuthentication no
+                PermitRootLogin yes
+                AllowUsers {self.ssh_target_username}
+                HostKey {host_key_path}
+                Subsystem	sftp	{sftp_subsystem_path}
+                PidFile {data_dir / "sshd.pid"}
+                LogLevel DEBUG3
+                {extra_config}
+                """
+            )
+        )
+        data_dir.chmod(0o700)
+        authorized_keys_path.chmod(0o600)
+        config_path.chmod(0o600)
+        # OpenSSH rejects host keys that are readable by group/other.
+        host_key_path.chmod(0o600)
+
+        self.start(
+            [
+                self._sshd_bin,
+                "-D",
+                "-f",
+                str(config_path),
+                "-E",
+                str(data_dir / "sshd.log"),
+            ],
+            stop_signal=signal.SIGTERM,
+        )
+        return port
+
+    @staticmethod
+    def _resolve_sftp_subsystem_path() -> str:
+        candidates = [
+            "/usr/lib/openssh/sftp-server",
+            "/usr/lib/ssh/sftp-server",
+            "/usr/libexec/openssh/sftp-server",
+            "/usr/libexec/sftp-server",
+        ]
+        for candidate in candidates:
+            if Path(candidate).exists():
+                return candidate
+        return "internal-sftp"
 
     def start_mysql_server(self):
         port = alloc_port()
@@ -710,8 +821,34 @@ class ProcessManager:
 
     def start_ssh_client(self, *args, password=None, **kwargs):
         preargs = []
+        env = kwargs.pop("env", None)
         if password:
-            preargs = ["sshpass", "-p", password]
+            if self._sshpass_bin and Path(self._sshpass_bin).is_file():
+                preargs = [self._sshpass_bin, "-p", password]
+            else:
+                # Fallback for environments without sshpass: force OpenSSH to
+                # read the password from SSH_ASKPASS in non-interactive mode.
+                askpass_path = self.ctx.tmpdir / f"ssh-askpass-{uuid.uuid4()}.sh"
+                askpass_path.write_text(
+                    "#!/bin/sh\nprintf '%s\\n' \"$WARPGATE_TEST_SSHPASS\"\n"
+                )
+                askpass_path.chmod(0o700)
+                env = {
+                    **os.environ,
+                    **(env or {}),
+                    "WARPGATE_TEST_SSHPASS": password,
+                    "SSH_ASKPASS": str(askpass_path),
+                    "SSH_ASKPASS_REQUIRE": "force",
+                    "DISPLAY": "warpgate-test:0",
+                }
+                kwargs.setdefault("stdin", subprocess.DEVNULL)
+
+        if env is not None:
+            kwargs["env"] = env
+
+        kwargs.setdefault("stdin", subprocess.PIPE)
+        kwargs.setdefault("stdout", subprocess.PIPE)
+
         p = self.start(
             [
                 *preargs,
@@ -725,8 +862,6 @@ class ProcessManager:
                 "UserKnownHostsFile=/dev/null",
                 *args,
             ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
             **kwargs,
         )
         return p

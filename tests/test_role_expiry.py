@@ -18,7 +18,7 @@ from uuid import uuid4
 import pytest
 
 from .api_client import admin_client, sdk
-from .conftest import WarpgateProcess
+from .conftest import SSH_TARGET_USERNAME, WarpgateProcess
 
 
 def setup_user_and_target(
@@ -53,7 +53,7 @@ def setup_user_and_target(
                         kind="Ssh",
                         host="localhost",
                         port=ssh_port,
-                        username="root",
+                        username=SSH_TARGET_USERNAME,
                         auth=sdk.SSHTargetAuth(
                             sdk.SSHTargetAuthSshTargetPublicKeyAuth(kind="PublicKey")
                         ),

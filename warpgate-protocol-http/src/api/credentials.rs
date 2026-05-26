@@ -377,6 +377,11 @@ impl Api {
             last_used: Set(None),
             label: Set(body.label.clone()),
             openssh_public_key: Set(body.openssh_public_key.clone()),
+            issued_by_warpgate: Set(false),
+            expires_at: Set(None),
+            max_uses: Set(None),
+            uses_left: Set(None),
+            revoked_at: Set(None),
         }
         .insert(&*db)
         .await

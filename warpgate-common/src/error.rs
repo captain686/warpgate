@@ -76,6 +76,10 @@ pub enum WarpgateError {
     InvalidNetworkAddress(String),
     #[error("session limit reached")]
     SessionLimitReached,
+    #[error("request too frequent: {0}")]
+    TooFrequentRequest(String),
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
 }
 
 impl ResponseError for WarpgateError {
@@ -87,7 +91,10 @@ impl ResponseError for WarpgateError {
             | Self::IpAddrNotAllowed(..) => poem::http::StatusCode::UNAUTHORIZED,
             Self::UserAlreadyExists(_) => poem::http::StatusCode::CONFLICT,
             Self::NoAdminAccess | Self::NoAdminPermission(_) => poem::http::StatusCode::FORBIDDEN,
-            Self::SessionLimitReached => poem::http::StatusCode::TOO_MANY_REQUESTS,
+            Self::SessionLimitReached | Self::TooFrequentRequest(_) => {
+                poem::http::StatusCode::TOO_MANY_REQUESTS
+            }
+            Self::InvalidRequest(_) => poem::http::StatusCode::BAD_REQUEST,
             _ => poem::http::StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

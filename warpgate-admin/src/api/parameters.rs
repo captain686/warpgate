@@ -1,9 +1,9 @@
 use poem::web::Data;
 use poem_openapi::payload::Json;
-use poem_openapi::{ApiResponse, Object, OpenApi};
+use poem_openapi::{ApiResponse, Enum, Object, OpenApi};
 use sea_orm::ActiveValue::NotSet;
 use sea_orm::{EntityTrait, IntoActiveModel, Set};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use warpgate_common::{AdminPermission, WarpgateError};
 use warpgate_common_http::AuthenticatedRequestContext;
 use warpgate_db_entities::Parameters;
@@ -13,6 +13,33 @@ use crate::api::common::require_admin_permission;
 
 pub struct Api;
 
+/// Log cleanup strategy used by the periodic database cleanup task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[oai(rename_all = "snake_case")]
+enum LogRetentionStrategy {
+    MaxAge,
+    MaxSize,
+}
+
+impl From<String> for LogRetentionStrategy {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "max_size" => Self::MaxSize,
+            _ => Self::MaxAge,
+        }
+    }
+}
+
+impl From<LogRetentionStrategy> for String {
+    fn from(value: LogRetentionStrategy) -> Self {
+        match value {
+            LogRetentionStrategy::MaxAge => "max_age".to_owned(),
+            LogRetentionStrategy::MaxSize => "max_size".to_owned(),
+        }
+    }
+}
+
 #[derive(Serialize, Object)]
 struct ParameterValues {
     pub allow_own_credential_management: bool,
@@ -20,6 +47,7 @@ struct ParameterValues {
     pub ssh_client_auth_publickey: bool,
     pub ssh_client_auth_password: bool,
     pub ssh_client_auth_keyboard_interactive: bool,
+    pub ssh_client_auth_otp: bool,
     pub minimize_password_login: bool,
     pub ticket_self_service_enabled: bool,
     pub ticket_auto_approve_existing_access: bool,
@@ -28,6 +56,8 @@ struct ParameterValues {
     pub ticket_require_description: bool,
     pub ticket_request_show_all_targets: bool,
     pub show_session_menu: bool,
+    pub log_retention_strategy: LogRetentionStrategy,
+    pub log_max_size_megabytes: Option<i64>,
 }
 
 #[derive(Serialize, Object)]
@@ -37,6 +67,7 @@ struct ParameterUpdate {
     pub ssh_client_auth_publickey: Option<bool>,
     pub ssh_client_auth_password: Option<bool>,
     pub ssh_client_auth_keyboard_interactive: Option<bool>,
+    pub ssh_client_auth_otp: Option<bool>,
     pub minimize_password_login: Option<bool>,
     pub ticket_self_service_enabled: Option<bool>,
     pub ticket_auto_approve_existing_access: Option<bool>,
@@ -45,6 +76,8 @@ struct ParameterUpdate {
     pub ticket_require_description: Option<bool>,
     pub ticket_request_show_all_targets: Option<bool>,
     pub show_session_menu: Option<bool>,
+    pub log_retention_strategy: Option<LogRetentionStrategy>,
+    pub log_max_size_megabytes: Option<Option<i64>>,
 }
 
 #[derive(ApiResponse)]
@@ -78,6 +111,7 @@ impl Api {
             ssh_client_auth_publickey: parameters.ssh_client_auth_publickey,
             ssh_client_auth_password: parameters.ssh_client_auth_password,
             ssh_client_auth_keyboard_interactive: parameters.ssh_client_auth_keyboard_interactive,
+            ssh_client_auth_otp: parameters.ssh_client_auth_otp,
             minimize_password_login: parameters.minimize_password_login,
             ticket_self_service_enabled: parameters.ticket_self_service_enabled,
             ticket_auto_approve_existing_access: parameters.ticket_auto_approve_existing_access,
@@ -86,6 +120,8 @@ impl Api {
             ticket_require_description: parameters.ticket_require_description,
             ticket_request_show_all_targets: parameters.ticket_request_show_all_targets,
             show_session_menu: parameters.show_session_menu,
+            log_retention_strategy: parameters.log_retention_strategy.into(),
+            log_max_size_megabytes: parameters.log_max_size_megabytes,
         })))
     }
 
@@ -114,6 +150,7 @@ impl Api {
         parameters.ssh_client_auth_keyboard_interactive = body
             .ssh_client_auth_keyboard_interactive
             .map_or(NotSet, Set);
+        parameters.ssh_client_auth_otp = body.ssh_client_auth_otp.map_or(NotSet, Set);
         parameters.minimize_password_login = body.minimize_password_login.map_or(NotSet, Set);
         parameters.ticket_self_service_enabled =
             body.ticket_self_service_enabled.map_or(NotSet, Set);
@@ -126,6 +163,11 @@ impl Api {
         parameters.ticket_request_show_all_targets =
             body.ticket_request_show_all_targets.map_or(NotSet, Set);
         parameters.show_session_menu = body.show_session_menu.map_or(NotSet, Set);
+        parameters.log_retention_strategy = body
+            .log_retention_strategy
+            .map(String::from)
+            .map_or(NotSet, Set);
+        parameters.log_max_size_megabytes = body.log_max_size_megabytes.map_or(NotSet, Set);
 
         Parameters::Entity::update(parameters).exec(&*db).await?;
         drop(db);

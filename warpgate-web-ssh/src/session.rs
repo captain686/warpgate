@@ -71,31 +71,33 @@ pub struct WebSshSession {
     pending_host_key: Arc<Mutex<Option<PendingHostKey>>>,
 }
 
+pub struct WebSshSessionInit {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub target_name: String,
+    pub target_kind: TargetKind,
+    pub server_handle: Arc<Mutex<WarpgateServerHandle>>,
+    pub command_tx: UnboundedSender<(RCCommand, Option<RCCommandReply>)>,
+    pub abort_tx: UnboundedSender<()>,
+    pub recordings: Arc<Mutex<SessionRecordings>>,
+}
+
 impl WebSshSession {
-    pub fn new(
-        id: Uuid,
-        user_id: Uuid,
-        target_name: String,
-        target_kind: TargetKind,
-        server_handle: Arc<Mutex<WarpgateServerHandle>>,
-        command_tx: UnboundedSender<(RCCommand, Option<RCCommandReply>)>,
-        abort_tx: UnboundedSender<()>,
-        recordings: Arc<Mutex<SessionRecordings>>,
-    ) -> Self {
+    pub fn new(init: WebSshSessionInit) -> Self {
         Self {
-            id,
-            user_id,
-            target_name,
-            target_kind,
-            _server_handle: server_handle,
-            command_tx,
-            abort_tx,
+            id: init.id,
+            user_id: init.user_id,
+            target_name: init.target_name,
+            target_kind: init.target_kind,
+            _server_handle: init.server_handle,
+            command_tx: init.command_tx,
+            abort_tx: init.abort_tx,
             output_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(OUTPUT_BUFFER_CAPACITY))),
             output_notify: Arc::new(Notify::new()),
             is_dead: Arc::new(AtomicBool::new(false)),
             disconnect_timer: Arc::new(Mutex::new(None)),
             channel_counter: Arc::new(AtomicUsize::new(0)),
-            recordings,
+            recordings: init.recordings,
             channel_recorders: Arc::new(Mutex::new(HashMap::new())),
             pending_host_key: Arc::new(Mutex::new(None)),
         }

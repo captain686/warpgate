@@ -26,6 +26,12 @@ use crate::keys::load_keys;
 use crate::server::session_handle::SSHSessionHandle;
 
 #[derive(Clone)]
+pub struct AllowedAuthMethods {
+    pub methods: MethodSet,
+    pub otp_enabled: bool,
+}
+
+#[derive(Clone)]
 struct RusshConfigInit {
     keys: Vec<PrivateKey>,
 }
@@ -90,6 +96,7 @@ async fn _handle_connection(
         let guard = server_handle.lock().await;
         guard.wrap_stream(stream).await?
     };
+    let allowed_auth = get_allowed_auth_methods(&services).await?;
 
     let session = match ServerSession::start(
         remote_address,
@@ -97,6 +104,8 @@ async fn _handle_connection(
         server_handle,
         session_handle_rx,
         event_rx,
+        allowed_auth.methods.clone(),
+        allowed_auth.otp_enabled,
     )
     .await
     {
@@ -109,13 +118,12 @@ async fn _handle_connection(
 
     let russh_config = {
         let config = services.config.lock().await;
-
         russh::server::Config {
             auth_rejection_time: Duration::from_secs(1),
             auth_rejection_time_initial: Some(Duration::from_secs(0)),
             inactivity_timeout: Some(config.store.ssh.inactivity_timeout),
             keepalive_interval: config.store.ssh.keepalive_interval,
-            methods: get_allowed_auth_methods(&services).await?,
+            methods: allowed_auth.methods,
             keys: russh_config_init.keys.clone(),
             event_buffer_size: 100,
             nodelay: true,
@@ -171,13 +179,13 @@ where
     ret
 }
 
-pub async fn get_allowed_auth_methods(services: &Services) -> Result<MethodSet> {
+pub async fn get_allowed_auth_methods(services: &Services) -> Result<AllowedAuthMethods> {
     let parameters = {
         let db = services.db.lock().await;
         Parameters::Entity::get(&db).await?
     };
 
-    let mut methods_vec: Vec<MethodKind> = Vec::new();
+    let mut methods_vec = Vec::new();
     if parameters.ssh_client_auth_publickey {
         methods_vec.push(MethodKind::PublicKey);
     }
@@ -188,11 +196,19 @@ pub async fn get_allowed_auth_methods(services: &Services) -> Result<MethodSet> 
         methods_vec.push(MethodKind::KeyboardInteractive);
     }
 
-    if methods_vec.is_empty() {
+    let otp_enabled = parameters.ssh_client_auth_otp;
+
+    let methods = if methods_vec.is_empty() {
         warn!(
             "All SSH authentication methods are disabled in parameters. Enabling all methods as fallback."
         );
-    }
+        MethodSet::all()
+    } else {
+        MethodSet::from(&methods_vec[..])
+    };
 
-    Ok(MethodSet::from(&methods_vec[..]))
+    Ok(AllowedAuthMethods {
+        methods,
+        otp_enabled,
+    })
 }

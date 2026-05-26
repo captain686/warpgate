@@ -47,6 +47,10 @@ mod m00042_database_target_auth_again;
 mod m00043_unique_usernames;
 mod m00044_ticket_requests;
 mod m00045_role_default_flag;
+mod m00046_vault;
+mod m00047_log_retention_strategy;
+mod m00048_public_key_credential_lifecycle;
+mod m00049_ssh_client_auth_otp;
 
 pub struct Migrator;
 
@@ -99,6 +103,10 @@ impl MigratorTrait for Migrator {
             Box::new(m00043_unique_usernames::Migration),
             Box::new(m00044_ticket_requests::Migration),
             Box::new(m00045_role_default_flag::Migration),
+            Box::new(m00046_vault::Migration),
+            Box::new(m00047_log_retention_strategy::Migration),
+            Box::new(m00048_public_key_credential_lifecycle::Migration),
+            Box::new(m00049_ssh_client_auth_otp::Migration),
         ]
     }
 }

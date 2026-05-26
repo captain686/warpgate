@@ -100,6 +100,35 @@ You manage the target and user lists and assign them to each other through the a
 
 You can also use the admin web interface to view the live session list, review session recordings, logs and more.
 
+### SSH client authentication key lifecycle
+
+For `SSH client -> Warpgate` user authentication, admins can now manage user public key credentials with lifecycle controls:
+
+* Issue a new SSH key pair from the admin API/UI (private key is returned once at issue time).
+* Revoke issued keys without deleting the credential record.
+* Configure optional key expiration (`valid_for_seconds`) and optional usage limits (`max_uses`).
+* Enforce revocation, expiration and usage limits during SSH user public key authentication.
+
+### SSH authentication method controls
+
+Warpgate exposes per-method SSH authentication switches in global parameters:
+
+* `ssh_client_auth_publickey`
+* `ssh_client_auth_password`
+* `ssh_client_auth_keyboard_interactive`
+* `ssh_client_auth_otp` (OTP over keyboard-interactive transport)
+
+These settings are available in the admin API and web UI.
+
+### Log retention strategy
+
+For session logs, Warpgate supports global retention strategy selection:
+
+* `max_age`: retain logs by age.
+* `max_size`: cap non-audit logs by total size and prune oldest entries first when the cap is exceeded.
+
+The maximum size is configured with `log_max_size_megabytes`.
+
 ## Contributing / building from source
 
 * You'll need Rust, NodeJS and NPM

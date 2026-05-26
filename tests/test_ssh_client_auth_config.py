@@ -4,13 +4,18 @@ Tests for SSH client authentication method configuration via Parameters API.
 These tests verify that SSH auth methods can be configured via the Parameters API
 and that the configuration actually affects SSH authentication behavior.
 """
+from base64 import b64decode
 import time
 from pathlib import Path
 from uuid import uuid4
 
+import paramiko
+import pyotp
+import pytest
+
 from .api_client import admin_client, sdk
-from .conftest import ProcessManager, WarpgateProcess
-from .util import wait_port
+from .conftest import ProcessManager, WarpgateProcess, SSH_TARGET_USERNAME
+from .util import ssh_exec_command_with_public_key, wait_port
 
 
 class TestSSHClientAuthConfigAPI:
@@ -28,10 +33,12 @@ class TestSSHClientAuthConfigAPI:
             assert hasattr(params, 'ssh_client_auth_publickey')
             assert hasattr(params, 'ssh_client_auth_password')
             assert hasattr(params, 'ssh_client_auth_keyboard_interactive')
+            assert hasattr(params, 'ssh_client_auth_otp')
             # Default values should be True
             assert params.ssh_client_auth_publickey is True
             assert params.ssh_client_auth_password is True
             assert params.ssh_client_auth_keyboard_interactive is True
+            assert params.ssh_client_auth_otp is True
 
     def test_update_ssh_auth_parameters(
         self,
@@ -44,13 +51,13 @@ class TestSSHClientAuthConfigAPI:
             params = api.get_parameters()
 
             # Update to disable password auth
-            api.update_parameters(sdk.ParameterUpdate(
-                allow_own_credential_management=params.allow_own_credential_management,
-                rate_limit_bytes_per_second=params.rate_limit_bytes_per_second,
-                ssh_client_auth_publickey=True,
-                ssh_client_auth_password=False,
-                ssh_client_auth_keyboard_interactive=True,
-            ))
+            self._update_ssh_auth_params(
+                api,
+                pubkey=True,
+                password=False,
+                keyboard_interactive=True,
+                otp=True,
+            )
 
             # Verify the update
             updated_params = api.get_parameters()
@@ -58,25 +65,38 @@ class TestSSHClientAuthConfigAPI:
             assert updated_params.ssh_client_auth_publickey is True
 
             # Restore original settings
-            api.update_parameters(sdk.ParameterUpdate(
+            self._update_ssh_auth_params(
+                api,
+                pubkey=True,
+                password=True,
+                keyboard_interactive=True,
+                otp=True,
+            )
+
+    @staticmethod
+    def _update_ssh_auth_params(api, pubkey=True, password=True, keyboard_interactive=True, otp=True):
+        params = api.get_parameters()
+        api.update_parameters(
+            sdk.ParameterUpdate(
                 allow_own_credential_management=params.allow_own_credential_management,
-                rate_limit_bytes_per_second=params.rate_limit_bytes_per_second,
-                ssh_client_auth_publickey=True,
-                ssh_client_auth_password=True,
-                ssh_client_auth_keyboard_interactive=True,
-            ))
+                ssh_client_auth_publickey=pubkey,
+                ssh_client_auth_password=password,
+                ssh_client_auth_keyboard_interactive=keyboard_interactive,
+                ssh_client_auth_otp=otp,
+            ),
+        )
 
 
 class TestSSHClientAuthConfigE2E:
     """E2E tests verifying SSH auth methods are actually enforced."""
 
     def _start_ssh_server(self, processes, wg_c_ed25519_pubkey):
-        """Start SSH server with delay for Docker port forwarding."""
+        """Start SSH server; docker mode needs a short forwarding warm-up."""
         ssh_port = processes.start_ssh_server(
             trusted_keys=[wg_c_ed25519_pubkey.read_text()]
         )
-        # Give Docker time to set up port forwarding
-        time.sleep(3)
+        if processes.ssh_target_username == "root":
+            time.sleep(3)
         wait_port(ssh_port)
         return ssh_port
 
@@ -107,7 +127,7 @@ class TestSSHClientAuthConfigE2E:
                         kind="Ssh",
                         host="localhost",
                         port=ssh_port,
-                        username="root",
+                        username=SSH_TARGET_USERNAME,
                         auth=sdk.SSHTargetAuth(
                             sdk.SSHTargetAuthSshTargetPublicKeyAuth(
                                 kind="PublicKey"
@@ -120,16 +140,15 @@ class TestSSHClientAuthConfigE2E:
         api.add_target_role(ssh_target.id, role.id)
         return user, ssh_target
 
-    def _update_ssh_auth_params(self, api, pubkey=True, password=True, keyboard_interactive=True):
+    def _update_ssh_auth_params(self, api, pubkey=True, password=True, keyboard_interactive=True, otp=True):
         """Helper to update SSH auth parameters."""
-        params = api.get_parameters()
-        api.update_parameters(sdk.ParameterUpdate(
-            allow_own_credential_management=params.allow_own_credential_management,
-            rate_limit_bytes_per_second=params.rate_limit_bytes_per_second,
-            ssh_client_auth_publickey=pubkey,
-            ssh_client_auth_password=password,
-            ssh_client_auth_keyboard_interactive=keyboard_interactive,
-        ))
+        TestSSHClientAuthConfigAPI._update_ssh_auth_params(
+            api,
+            pubkey=pubkey,
+            password=password,
+            keyboard_interactive=keyboard_interactive,
+            otp=otp,
+        )
 
     def test_password_auth_disabled(
         self,
@@ -322,7 +341,92 @@ class TestSSHClientAuthConfigE2E:
         assert output == b"/bin/sh\n"
         assert ssh_client.returncode == 0
 
-        # Password should also work
+    def test_otp_auth_disabled_blocks_otp_login(
+        self,
+        processes: ProcessManager,
+        wg_c_ed25519_pubkey: Path,
+        otp_key_base32: str,
+        otp_key_base64: str,
+        timeout,
+        shared_wg: WarpgateProcess,
+    ):
+        """OTP should be rejected when ssh_client_auth_otp is disabled."""
+        ssh_port = self._start_ssh_server(processes, wg_c_ed25519_pubkey)
+
+        wg = processes.start_wg()
+        wait_port(wg.http_port, for_process=wg.process, recv=False)
+        wait_port(wg.ssh_port, for_process=wg.process)
+
+        url = f"https://localhost:{wg.http_port}"
+        with admin_client(url) as api:
+            role = api.create_role(sdk.RoleDataRequest(name=f"role-{uuid4()}"))
+            user = api.create_user(sdk.CreateUserRequest(username=f"user-{uuid4()}"))
+            api.create_public_key_credential(
+                user.id,
+                sdk.NewPublicKeyCredential(
+                    label="Public Key",
+                    openssh_public_key=open("ssh-keys/id_ed25519.pub").read().strip(),
+                ),
+            )
+            api.create_otp_credential(
+                user.id,
+                sdk.NewOtpCredential(secret_key=list(b64decode(otp_key_base64))),
+            )
+            api.update_user(
+                user.id,
+                sdk.UserDataRequest(
+                    username=user.username,
+                    credential_policy=sdk.UserRequireCredentialsPolicy(
+                        ssh=["PublicKey", "Totp"],
+                    ),
+                ),
+            )
+            api.add_user_role(user.id, role.id)
+            ssh_target = api.create_target(
+                sdk.TargetDataRequest(
+                    name=f"ssh-{uuid4()}",
+                    options=sdk.TargetOptions(
+                        sdk.TargetOptionsTargetSSHOptions(
+                            kind="Ssh",
+                            host="localhost",
+                            port=ssh_port,
+                            username=SSH_TARGET_USERNAME,
+                            auth=sdk.SSHTargetAuth(
+                                sdk.SSHTargetAuthSshTargetPublicKeyAuth(kind="PublicKey")
+                            ),
+                        )
+                    ),
+                )
+            )
+            api.add_target_role(ssh_target.id, role.id)
+            self._update_ssh_auth_params(
+                api,
+                pubkey=True,
+                password=False,
+                keyboard_interactive=True,
+                otp=False,
+            )
+
+        wg.process.terminate()
+        wg.process.wait()
+
+        wg2 = processes.start_wg(share_with=wg)
+        wait_port(wg2.http_port, for_process=wg2.process, recv=False)
+        wait_port(wg2.ssh_port, for_process=wg2.process)
+
+        totp = pyotp.TOTP(otp_key_base32)
+        with pytest.raises(paramiko.AuthenticationException):
+            ssh_exec_command_with_public_key(
+                "localhost",
+                wg2.ssh_port,
+                f"{user.username}:{ssh_target.name}",
+                "ssh-keys/id_ed25519",
+                "ls /bin/sh",
+                timeout=float(timeout),
+                otp_code=totp.now(),
+            )
+
+        # Password should fail because password auth is disabled
         ssh_client = processes.start_ssh_client(
             f"{user.username}:{ssh_target.name}@localhost",
             "-p", str(wg2.ssh_port),
@@ -331,6 +435,5 @@ class TestSSHClientAuthConfigE2E:
             "ls", "/bin/sh",
             password="testpass123",
         )
-        output, _ = ssh_client.communicate(timeout=timeout)
-        assert output == b"/bin/sh\n"
-        assert ssh_client.returncode == 0
+        ssh_client.communicate(timeout=timeout)
+        assert ssh_client.returncode != 0
