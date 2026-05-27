@@ -8,7 +8,7 @@ use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait};
 use time::OffsetDateTime;
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
-use tokio::sync::{Mutex, broadcast, mpsc};
+use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 use tracing::error;
 use uuid::Uuid;
 use warpgate_common::helpers::fs::secure_file;
@@ -17,9 +17,14 @@ use warpgate_db_entities::Recording;
 
 use super::{Error, Result};
 
+enum RecordingWriterCommand {
+    Write(Bytes),
+    Flush(oneshot::Sender<()>),
+}
+
 #[derive(Clone)]
 pub struct RecordingWriter {
-    sender: mpsc::Sender<Bytes>,
+    sender: mpsc::Sender<RecordingWriterCommand>,
     live_sender: broadcast::Sender<Bytes>,
     drop_signal: mpsc::Sender<()>,
 }
@@ -41,7 +46,7 @@ impl RecordingWriter {
             secure_file(&path)?;
         }
         let mut writer = BufWriter::new(file);
-        let (sender, mut receiver) = mpsc::channel::<Bytes>(1024);
+        let (sender, mut receiver) = mpsc::channel::<RecordingWriterCommand>(1024);
         let (drop_signal, mut drop_receiver) = mpsc::channel(1);
 
         let live_sender = broadcast::channel(128).0;
@@ -69,9 +74,14 @@ impl RecordingWriter {
                         writer.flush().await?;
                     }
                     tokio::select! {
-                        data = receiver.recv() => match data {
-                            Some(bytes) => {
+                        command = receiver.recv() => match command {
+                            Some(RecordingWriterCommand::Write(bytes)) => {
                                 writer.write_all(&bytes).await?;
+                            }
+                            Some(RecordingWriterCommand::Flush(reply)) => {
+                                writer.flush().await?;
+                                last_flush = Instant::now();
+                                let _ = reply.send(());
                             }
                             None => break,
                         },
@@ -113,11 +123,20 @@ impl RecordingWriter {
     pub async fn write(&self, data: &[u8]) -> Result<()> {
         let data = Bytes::from(data.to_vec());
         self.sender
-            .send(data.clone())
+            .send(RecordingWriterCommand::Write(data.clone()))
             .await
             .map_err(|_| Error::Closed)?;
         let _ = self.live_sender.send(data);
         Ok(())
+    }
+
+    pub async fn flush(&self) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(RecordingWriterCommand::Flush(tx))
+            .await
+            .map_err(|_| Error::Closed)?;
+        rx.await.map_err(|_| Error::Closed)
     }
 }
 

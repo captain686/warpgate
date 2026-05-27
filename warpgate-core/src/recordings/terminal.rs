@@ -88,28 +88,37 @@ impl TerminalRecorder {
         self.started_at.elapsed().as_secs_f32()
     }
 
-    async fn write_item(&self, item: &TerminalRecordingItem) -> Result<()> {
+    async fn write_item(&self, item: &TerminalRecordingItem, flush: bool) -> Result<()> {
         let mut serialized_item = serde_json::to_vec(&item).map_err(Error::Serialization)?;
         serialized_item.push(b'\n');
         self.writer.write(&serialized_item).await?;
+        if flush {
+            self.writer.flush().await?;
+        }
         Ok(())
     }
 
     pub async fn write(&self, stream: TerminalRecordingStreamId, data: &[u8]) -> Result<()> {
-        self.write_item(&TerminalRecordingItem::Data {
-            time: self.get_time(),
-            stream,
-            data: Bytes::from(data.to_vec()),
-        })
+        self.write_item(
+            &TerminalRecordingItem::Data {
+                time: self.get_time(),
+                stream,
+                data: Bytes::from(data.to_vec()),
+            },
+            false,
+        )
         .await
     }
 
     pub async fn write_pty_resize(&self, cols: u32, rows: u32) -> Result<()> {
-        self.write_item(&TerminalRecordingItem::PtyResize {
-            time: self.get_time(),
-            rows,
-            cols,
-        })
+        self.write_item(
+            &TerminalRecordingItem::PtyResize {
+                time: self.get_time(),
+                rows,
+                cols,
+            },
+            true,
+        )
         .await
     }
 }
