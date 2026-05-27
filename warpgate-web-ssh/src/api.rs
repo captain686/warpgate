@@ -35,6 +35,14 @@ pub async fn ws_handler(
         ));
     }
 
+    if session.is_dead() {
+        manager.remove_session(session_id).await;
+        return Err(poem::Error::from_string(
+            "Session not found",
+            StatusCode::NOT_FOUND,
+        ));
+    }
+
     session.cancel_disconnect_timer().await;
 
     let manager = (*manager).clone();
@@ -106,6 +114,10 @@ async fn handle_client_message(
     db: &std::sync::Arc<tokio::sync::Mutex<sea_orm::DatabaseConnection>>,
     msg: ClientMessage,
 ) -> Option<ServerMessage> {
+    if session.is_dead() {
+        return Some(ServerMessage::SessionClosed);
+    }
+
     match msg {
         ClientMessage::OpenChannel { cols, rows } => {
             let cols = cols.unwrap_or(80);

@@ -71,6 +71,7 @@ pub enum ServerMessage {
     Error {
         message: String,
     },
+    SessionClosed,
     HostKeyUnknown {
         host: String,
         port: u16,

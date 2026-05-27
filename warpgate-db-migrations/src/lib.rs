@@ -54,6 +54,7 @@ mod m00049_ssh_client_auth_otp;
 mod m00050_target_scoped_ssh_credentials;
 mod m00051_log_max_age;
 mod m00052_admin_manage_admin_users;
+mod m00053_fix_public_key_lifecycle_dates;
 
 pub struct Migrator;
 
@@ -113,6 +114,7 @@ impl MigratorTrait for Migrator {
             Box::new(m00050_target_scoped_ssh_credentials::Migration),
             Box::new(m00051_log_max_age::Migration),
             Box::new(m00052_admin_manage_admin_users::Migration),
+            Box::new(m00053_fix_public_key_lifecycle_dates::Migration),
         ]
     }
 }

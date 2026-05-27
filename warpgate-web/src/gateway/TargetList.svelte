@@ -59,10 +59,23 @@ $effect(() => {
 })
 
 async function openWebSsh (target: TargetSnapshot) {
-    const { sessionId } = await api.createWebSshSession({
-        createWebSshSessionBody: { targetId: target.id },
-    })
-    window.open(`/@warpgate/gateway#/web-ssh/${sessionId}`, '_blank')
+    const terminalWindow = window.open('', '_blank')
+
+    try {
+        const { sessionId } = await api.createWebSshSession({
+            createWebSshSessionBody: { targetId: target.id },
+        })
+        const terminalUrl = `/@warpgate/gateway#/web-ssh/${sessionId}`
+        if (terminalWindow) {
+            terminalWindow.location.href = terminalUrl
+            terminalWindow.focus()
+        } else {
+            location.href = terminalUrl
+        }
+    } catch (error) {
+        terminalWindow?.close()
+        credentialActionError = await formatError(error, 'Failed to open Web terminal')
+    }
 }
 
 async function formatError (error: unknown, fallback: string): Promise<string> {

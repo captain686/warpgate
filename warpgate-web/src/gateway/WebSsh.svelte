@@ -33,6 +33,7 @@
         | { type: 'eof'; channel_id: string }
         | { type: 'exit_status'; channel_id: string; code: number }
         | { type: 'error'; message: string }
+        | { type: 'session_closed' }
         | { type: 'host_key_unknown'; host: string; port: number; key_type: string; key_base64: string }
 
     interface ChannelState {
@@ -128,6 +129,11 @@
             case 'error':
                 ws.state = ConnectionState.Error
                 connectionError = msg.message
+                break
+            case 'session_closed':
+                ws.close()
+                ws.state = ConnectionState.Disconnected
+                connectionError = 'Session closed.'
                 break
             case 'host_key_unknown':
                 pendingHostKey = msg
