@@ -4283,6 +4283,18 @@
           "port": {
             "type": "integer",
             "format": "uint16"
+          },
+          "username": {
+            "type": "string"
+          },
+          "allow_insecure_algos": {
+            "type": "boolean"
+          },
+          "auth": {
+            "$ref": "#/components/schemas/SSHTargetAuth"
+          },
+          "jumpHost": {
+            "$ref": "#/components/schemas/SSHJumpHostOptions"
           }
         }
       },
@@ -5422,6 +5434,31 @@
           }
         }
       },
+      "SSHJumpHostOptions": {
+        "type": "object",
+        "title": "SSHJumpHostOptions",
+        "required": [
+          "host",
+          "port",
+          "username",
+          "auth"
+        ],
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "uint16"
+          },
+          "username": {
+            "type": "string"
+          },
+          "auth": {
+            "$ref": "#/components/schemas/SSHTargetAuth"
+          }
+        }
+      },
       "SSHKey": {
         "type": "object",
         "title": "SSHKey",
@@ -6036,6 +6073,9 @@
           },
           "auth": {
             "$ref": "#/components/schemas/SSHTargetAuth"
+          },
+          "jumpHost": {
+            "$ref": "#/components/schemas/SSHJumpHostOptions"
           }
         }
       },

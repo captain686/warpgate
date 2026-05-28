@@ -8,21 +8,25 @@
     // unique id for tooltip target
     const id = `role-${role.id}`
 
+    function hasPermission(role: AdminRole, key: string): boolean {
+        return Boolean((role as unknown as Record<string, unknown>)[key])
+    }
+
     function permissionCount(role: AdminRole): number {
         return ADMIN_PERMISSIONS.reduce(
-            (n, p) => n + (role[p.key] ? 1 : 0),
+            (n, p) => n + (hasPermission(role, p.key) ? 1 : 0),
             0,
         )
     }
 
     function permissionLists(role: AdminRole): [string, string][] {
         const categories = [...new Set(
-            ADMIN_PERMISSIONS.filter(p => role[p.key]).map(p => p.category),
+            ADMIN_PERMISSIONS.filter(p => hasPermission(role, p.key)).map(p => p.category),
         )]
         return categories
             .map(cat => {
                 const perms = ADMIN_PERMISSIONS
-                    .filter(p => p.category === cat && role[p.key])
+                    .filter(p => p.category === cat && hasPermission(role, p.key))
                     .map(p => p.label)
                 if (!perms.length) {
                     return null
