@@ -152,24 +152,30 @@ class ProcessManager:
                         pass
                 p.kill()
 
-    def start_ssh_server(self, trusted_keys=None, extra_config=""):
+    def start_ssh_server(self, trusted_keys=None, extra_config="", trusted_ca=None):
         trusted_keys = trusted_keys or []
+        trusted_ca = trusted_ca or []
         if self._docker_bin:
-            return self._start_ssh_server_docker(trusted_keys, extra_config)
-        return self._start_ssh_server_local(trusted_keys, extra_config)
+            return self._start_ssh_server_docker(trusted_keys, extra_config, trusted_ca)
+        return self._start_ssh_server_local(trusted_keys, extra_config, trusted_ca)
 
-    def _start_ssh_server_docker(self, trusted_keys: List[str], extra_config: str):
+    def _start_ssh_server_docker(
+        self, trusted_keys: List[str], extra_config: str, trusted_ca: List[str]
+    ):
         port = alloc_port()
         data_dir = self.ctx.tmpdir / f"sshd-{uuid.uuid4()}"
         data_dir.mkdir(parents=True)
         authorized_keys_path = data_dir / "authorized_keys"
         authorized_keys_path.write_text("\n".join(trusted_keys))
         config_path = data_dir / "sshd_config"
+        ssh_ca = data_dir / "trusted_ca"
+        ssh_ca.write_text("\n".join(trusted_ca))
         config_path.write_text(
             dedent(
                 f"""\
                 Port 22
                 AuthorizedKeysFile {authorized_keys_path}
+                TrustedUserCAKeys {ssh_ca}
                 AllowAgentForwarding yes
                 AllowTcpForwarding yes
                 GatewayPorts yes
@@ -186,9 +192,11 @@ class ProcessManager:
                 """
             )
         )
+
         data_dir.chmod(0o700)
         authorized_keys_path.chmod(0o600)
         config_path.chmod(0o600)
+        ssh_ca.chmod(0o600)
 
         self.start(
             [
@@ -208,7 +216,9 @@ class ProcessManager:
         )
         return port
 
-    def _start_ssh_server_local(self, trusted_keys: List[str], extra_config: str):
+    def _start_ssh_server_local(
+        self, trusted_keys: List[str], extra_config: str, trusted_ca: List[str]
+    ):
         if not self._sshd_bin:
             raise RuntimeError(
                 "Neither Docker nor local sshd is available for SSH target test setup"
@@ -220,6 +230,8 @@ class ProcessManager:
         authorized_keys_path = data_dir / "authorized_keys"
         authorized_keys_path.write_text("\n".join(trusted_keys))
         config_path = data_dir / "sshd_config"
+        ssh_ca = data_dir / "trusted_ca"
+        ssh_ca.write_text("\n".join(trusted_ca))
         host_key_path = Path(os.getcwd()) / "ssh-keys" / "id_ed25519"
         sftp_subsystem_path = self._resolve_sftp_subsystem_path()
         config_path.write_text(
@@ -228,6 +240,7 @@ class ProcessManager:
                 Port {port}
                 ListenAddress 127.0.0.1
                 AuthorizedKeysFile {authorized_keys_path}
+                TrustedUserCAKeys {ssh_ca}
                 AllowAgentForwarding yes
                 AllowTcpForwarding yes
                 GatewayPorts yes
@@ -251,6 +264,7 @@ class ProcessManager:
         data_dir.chmod(0o700)
         authorized_keys_path.chmod(0o600)
         config_path.chmod(0o600)
+        ssh_ca.chmod(0o600)
         # OpenSSH rejects host keys that are readable by group/other.
         host_key_path.chmod(0o600)
 

@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Warpgate HTTP proxy",
-    "version": "v0.23.4-50-g844c0e5-modified"
+    "version": "v0.23.4-62-g012f942-modified"
   },
   "servers": [
     {
@@ -461,6 +461,12 @@
           },
           "404": {
             "description": ""
+          },
+          "503": {
+            "description": ""
+          },
+          "504": {
+            "description": ""
           }
         },
         "operationId": "start_sso"
@@ -570,6 +576,44 @@
         "operationId": "add_my_public_key"
       }
     },
+    "/profile/credentials/public-keys/issue": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json; charset=utf-8": {
+              "schema": {
+                "$ref": "#/components/schemas/IssuePublicKeyCredentialRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedPublicKeyCredential"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "issue_my_public_key"
+      }
+    },
     "/profile/credentials/public-keys/{id}": {
       "delete": {
         "parameters": [
@@ -605,6 +649,43 @@
           }
         ],
         "operationId": "delete_my_public_key"
+      }
+    },
+    "/profile/credentials/public-keys/{id}/revoke": {
+      "post": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "revoke_my_public_key"
       }
     },
     "/profile/credentials/otp": {
@@ -1229,9 +1310,6 @@
           },
           "403": {
             "description": ""
-          },
-          "404": {
-            "description": ""
           }
         },
         "security": [
@@ -1273,6 +1351,7 @@
           "users_create",
           "users_edit",
           "users_delete",
+          "users_manage_admins",
           "access_roles_create",
           "access_roles_edit",
           "access_roles_delete",
@@ -1303,6 +1382,9 @@
             "type": "boolean"
           },
           "users_delete": {
+            "type": "boolean"
+          },
+          "users_manage_admins": {
             "type": "boolean"
           },
           "access_roles_create": {
@@ -1586,6 +1668,10 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "target_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -1595,7 +1681,9 @@
         "required": [
           "id",
           "label",
-          "abbreviated"
+          "abbreviated",
+          "openssh_public_key",
+          "issued_by_warpgate"
         ],
         "properties": {
           "id": {
@@ -1604,6 +1692,10 @@
           },
           "label": {
             "type": "string"
+          },
+          "target_id": {
+            "type": "string",
+            "format": "uuid"
           },
           "date_added": {
             "type": "string",
@@ -1615,6 +1707,28 @@
           },
           "abbreviated": {
             "type": "string"
+          },
+          "openssh_public_key": {
+            "type": "string"
+          },
+          "issued_by_warpgate": {
+            "type": "boolean"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "max_uses": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "uses_left": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "revoked_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -1771,6 +1885,34 @@
           }
         }
       },
+      "IssuePublicKeyCredentialRequest": {
+        "type": "object",
+        "title": "IssuePublicKeyCredentialRequest",
+        "required": [
+          "label",
+          "target_id"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "valid_for_seconds": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "max_uses": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "algorithm": {
+            "$ref": "#/components/schemas/IssuedPublicKeyAlgorithm"
+          }
+        }
+      },
       "IssuedCertificateCredential": {
         "type": "object",
         "title": "IssuedCertificateCredential",
@@ -1783,6 +1925,29 @@
             "$ref": "#/components/schemas/ExistingCertificateCredential"
           },
           "certificate_pem": {
+            "type": "string"
+          }
+        }
+      },
+      "IssuedPublicKeyAlgorithm": {
+        "type": "string",
+        "enum": [
+          "ed25519",
+          "rsa_sha512"
+        ]
+      },
+      "IssuedPublicKeyCredential": {
+        "type": "object",
+        "title": "IssuedPublicKeyCredential",
+        "required": [
+          "credential",
+          "private_key_openssh"
+        ],
+        "properties": {
+          "credential": {
+            "$ref": "#/components/schemas/ExistingPublicKeyCredential"
+          },
+          "private_key_openssh": {
             "type": "string"
           }
         }
@@ -1879,6 +2044,10 @@
               "type": "integer",
               "format": "uint8"
             }
+          },
+          "target_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -1895,6 +2064,10 @@
           },
           "openssh_public_key": {
             "type": "string"
+          },
+          "target_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },

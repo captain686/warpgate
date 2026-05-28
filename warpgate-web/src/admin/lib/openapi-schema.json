@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Warpgate Web Admin",
-    "version": "v0.23.4-53-g70a028a-modified"
+    "version": "v0.23.4-62-g012f942-modified"
   },
   "servers": [
     {
@@ -1910,7 +1910,7 @@
             "content": {
               "application/json; charset=utf-8": {
                 "schema": {
-                  "$ref": "#/components/schemas/User"
+                  "$ref": "#/components/schemas/CreateUserResponseBody"
                 }
               }
             }
@@ -4090,6 +4090,7 @@
           "users_create",
           "users_edit",
           "users_delete",
+          "users_manage_admins",
           "access_roles_create",
           "access_roles_edit",
           "access_roles_delete",
@@ -4130,6 +4131,9 @@
             "type": "boolean"
           },
           "users_delete": {
+            "type": "boolean"
+          },
+          "users_manage_admins": {
             "type": "boolean"
           },
           "access_roles_create": {
@@ -4218,6 +4222,9 @@
           "users_delete": {
             "type": "boolean"
           },
+          "users_manage_admins": {
+            "type": "boolean"
+          },
           "access_roles_create": {
             "type": "boolean"
           },
@@ -4293,7 +4300,7 @@
           "auth": {
             "$ref": "#/components/schemas/SSHTargetAuth"
           },
-          "jumpHost": {
+          "jump_host": {
             "$ref": "#/components/schemas/SSHJumpHostOptions"
           }
         }
@@ -4434,6 +4441,24 @@
             "type": "string"
           },
           "description": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateUserResponseBody": {
+        "type": "object",
+        "title": "CreateUserResponseBody",
+        "required": [
+          "user"
+        ],
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/User"
+          },
+          "generated_password": {
             "type": "string"
           }
         }
@@ -5515,6 +5540,9 @@
             "$ref": "#/components/schemas/SSHTargetAuth_SshTargetPublicKeyAuth"
           },
           {
+            "$ref": "#/components/schemas/SSHTargetAuth_SshTargetCertificateAuth"
+          },
+          {
             "$ref": "#/components/schemas/SSHTargetAuth_SshTargetIamRoleAuth"
           }
         ],
@@ -5523,9 +5551,32 @@
           "mapping": {
             "Password": "#/components/schemas/SSHTargetAuth_SshTargetPasswordAuth",
             "PublicKey": "#/components/schemas/SSHTargetAuth_SshTargetPublicKeyAuth",
+            "Certificate": "#/components/schemas/SSHTargetAuth_SshTargetCertificateAuth",
             "IamRole": "#/components/schemas/SSHTargetAuth_SshTargetIamRoleAuth"
           }
         }
+      },
+      "SSHTargetAuth_SshTargetCertificateAuth": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "Certificate"
+                ],
+                "example": "Certificate"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/SshTargetCertificateAuth"
+          }
+        ]
       },
       "SSHTargetAuth_SshTargetIamRoleAuth": {
         "allOf": [
@@ -5628,6 +5679,10 @@
             "type": "string"
           }
         }
+      },
+      "SshTargetCertificateAuth": {
+        "type": "object",
+        "title": "SshTargetCertificateAuth"
       },
       "SshTargetIamRoleAuth": {
         "type": "object",
@@ -6074,7 +6129,7 @@
           "auth": {
             "$ref": "#/components/schemas/SSHTargetAuth"
           },
-          "jumpHost": {
+          "jump_host": {
             "$ref": "#/components/schemas/SSHJumpHostOptions"
           }
         }

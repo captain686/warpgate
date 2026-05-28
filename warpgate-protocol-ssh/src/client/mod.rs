@@ -33,7 +33,10 @@ use warpgate_core::Services;
 use self::handler::ClientHandlerEvent;
 use super::{ChannelOperation, DirectTCPIPParams};
 use crate::client::handler::ClientHandlerError;
-use crate::{ForwardedStreamlocalParams, ForwardedTcpIpParams, load_keys, load_preferred_key};
+use crate::{
+    ForwardedStreamlocalParams, ForwardedTcpIpParams, generate_private,
+    issue_temporary_client_certificate, load_keys, load_preferred_key,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectionError {
@@ -435,6 +438,98 @@ impl RemoteClient {
         Ok(false)
     }
 
+    fn get_insecure_preferred() -> Preferred {
+        Preferred {
+            kex: Cow::Borrowed(&[
+                kex::MLKEM768X25519_SHA256,
+                kex::CURVE25519,
+                kex::CURVE25519_PRE_RFC_8731,
+                kex::ECDH_SHA2_NISTP256,
+                kex::ECDH_SHA2_NISTP384,
+                kex::ECDH_SHA2_NISTP521,
+                kex::DH_G16_SHA512,
+                kex::DH_G14_SHA256, // non-default
+                kex::DH_GEX_SHA256,
+                kex::DH_G1_SHA1, // non-default
+                kex::EXTENSION_SUPPORT_AS_CLIENT,
+                kex::EXTENSION_SUPPORT_AS_SERVER,
+                kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT,
+                kex::EXTENSION_OPENSSH_STRICT_KEX_AS_SERVER,
+            ]),
+            key: Cow::Borrowed(&[
+                russh::keys::Algorithm::Ed25519,
+                russh::keys::Algorithm::Ecdsa {
+                    curve: russh::keys::EcdsaCurve::NistP256,
+                },
+                russh::keys::Algorithm::Ecdsa {
+                    curve: russh::keys::EcdsaCurve::NistP384,
+                },
+                russh::keys::Algorithm::Ecdsa {
+                    curve: russh::keys::EcdsaCurve::NistP521,
+                },
+                russh::keys::Algorithm::Rsa {
+                    hash: Some(russh::keys::HashAlg::Sha256),
+                },
+                russh::keys::Algorithm::Rsa {
+                    hash: Some(russh::keys::HashAlg::Sha512),
+                },
+                russh::keys::Algorithm::Rsa { hash: None },
+            ]),
+            cipher: Cow::Borrowed(&[
+                russh::cipher::CHACHA20_POLY1305,
+                russh::cipher::AES_256_GCM,
+                russh::cipher::AES_256_CTR,
+                russh::cipher::AES_256_CBC,
+                russh::cipher::AES_192_CTR,
+                russh::cipher::AES_192_CBC,
+                russh::cipher::AES_128_CTR,
+                russh::cipher::AES_128_CBC,
+                russh::cipher::TRIPLE_DES_CBC,
+            ]),
+            ..<_>::default()
+        }
+    }
+
+    async fn connect_certificate(
+        services: &Services,
+        username: &str,
+        session: &mut Handle<ClientHandler>,
+    ) -> Result<bool, ConnectionError> {
+        let config = services.config.lock().await.clone();
+        let cert_validity = config.store.ssh.temporary_client_certificate_validity;
+        let keys = load_keys(&config, &services.global_params, "client")?;
+        for key in keys {
+            // Generate a certificate signed by private key
+            let client_key = generate_private(key.algorithm()).map_err(russh::Error::from)?;
+            let key_str = client_key
+                .public_key()
+                .to_openssh()
+                .map_err(russh::Error::from)?;
+            let certificate = issue_temporary_client_certificate(
+                username,
+                &PublicKey::from(&client_key),
+                &key,
+                cert_validity,
+            )?;
+
+            let response = session
+                .authenticate_openssh_cert(username.to_string(), Arc::new(client_key), certificate)
+                .await?;
+
+            if Self::_handle_auth_result(session, username.to_string(), response)
+                .await
+                .unwrap_or(false)
+            {
+                debug!(
+                    username = username,
+                    key=%key_str,
+                    "Authenticated with certificate");
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     async fn connect(&mut self, ssh_options: TargetSSHOptions) -> Result<(), ConnectionError> {
         let address_str = format!("{}:{}", ssh_options.host, ssh_options.port);
         let address = match address_str
@@ -456,55 +551,7 @@ impl RemoteClient {
             "Connecting"
         );
         let algos = if ssh_options.allow_insecure_algos.unwrap_or(false) {
-            Preferred {
-                kex: Cow::Borrowed(&[
-                    kex::MLKEM768X25519_SHA256,
-                    kex::CURVE25519,
-                    kex::CURVE25519_PRE_RFC_8731,
-                    kex::ECDH_SHA2_NISTP256,
-                    kex::ECDH_SHA2_NISTP384,
-                    kex::ECDH_SHA2_NISTP521,
-                    kex::DH_G16_SHA512,
-                    kex::DH_G14_SHA256, // non-default
-                    kex::DH_GEX_SHA256,
-                    kex::DH_G1_SHA1, // non-default
-                    kex::EXTENSION_SUPPORT_AS_CLIENT,
-                    kex::EXTENSION_SUPPORT_AS_SERVER,
-                    kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT,
-                    kex::EXTENSION_OPENSSH_STRICT_KEX_AS_SERVER,
-                ]),
-                key: Cow::Borrowed(&[
-                    russh::keys::Algorithm::Ed25519,
-                    russh::keys::Algorithm::Ecdsa {
-                        curve: russh::keys::EcdsaCurve::NistP256,
-                    },
-                    russh::keys::Algorithm::Ecdsa {
-                        curve: russh::keys::EcdsaCurve::NistP384,
-                    },
-                    russh::keys::Algorithm::Ecdsa {
-                        curve: russh::keys::EcdsaCurve::NistP521,
-                    },
-                    russh::keys::Algorithm::Rsa {
-                        hash: Some(russh::keys::HashAlg::Sha256),
-                    },
-                    russh::keys::Algorithm::Rsa {
-                        hash: Some(russh::keys::HashAlg::Sha512),
-                    },
-                    russh::keys::Algorithm::Rsa { hash: None },
-                ]),
-                cipher: Cow::Borrowed(&[
-                    russh::cipher::CHACHA20_POLY1305,
-                    russh::cipher::AES_256_GCM,
-                    russh::cipher::AES_256_CTR,
-                    russh::cipher::AES_256_CBC,
-                    russh::cipher::AES_192_CTR,
-                    russh::cipher::AES_192_CBC,
-                    russh::cipher::AES_128_CTR,
-                    russh::cipher::AES_128_CBC,
-                    russh::cipher::TRIPLE_DES_CBC,
-                ]),
-                ..<_>::default()
-            }
+            Self::get_insecure_preferred()
         } else {
             Preferred::default()
         };
@@ -798,6 +845,14 @@ impl RemoteClient {
                     }
                     auth_error_msg =
                         Some("Public key authentication was rejected by the SSH target".into());
+                }
+            }
+            SSHTargetAuth::Certificate(_) => {
+                let services = self.services.clone();
+                auth_result = abortable!(Self::connect_certificate(&services, username, session))?;
+                if !auth_result {
+                    auth_error_msg =
+                        Some("Certificate authentication was rejected by the SSH target".into());
                 }
             }
             SSHTargetAuth::IamRole(_) => {

@@ -10,7 +10,7 @@ use defaults::{
     _default_http_listen, _default_kubernetes_listen, _default_mysql_listen,
     _default_postgres_listen, _default_recordings_path, _default_retention,
     _default_session_max_age, _default_ssh_inactivity_timeout, _default_ssh_keys_path,
-    _default_ssh_listen,
+    _default_ssh_listen, _default_temporary_client_certificate_validity,
 };
 use poem_openapi::{Object, Union};
 use schemars::JsonSchema;
@@ -303,6 +303,13 @@ pub struct SshConfig {
 
     #[serde(default)]
     pub keepalive_interval: Option<Duration>,
+
+    #[serde(
+        default = "_default_temporary_client_certificate_validity",
+        with = "humantime_serde"
+    )]
+    #[schemars(with = "String")]
+    pub temporary_client_certificate_validity: Duration,
 }
 
 impl Default for SshConfig {
@@ -316,6 +323,7 @@ impl Default for SshConfig {
             external_host: None,
             inactivity_timeout: _default_ssh_inactivity_timeout(),
             keepalive_interval: None,
+            temporary_client_certificate_validity: _default_temporary_client_certificate_validity(),
         }
     }
 }
