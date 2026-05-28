@@ -29,4 +29,11 @@
     .page-summary-bar-extra {
         margin-left: auto;
     }
+
+    @media (max-width: 576px) {
+        .page-summary-bar-extra {
+            width: 100%;
+            margin-left: 0;
+        }
+    }
 </style>

@@ -175,7 +175,7 @@
 
 <Loadable promise={initPromise}>
 
-    <div class="mt-5">
+    <div class="login-panel">
         <div class="page-summary-bar">
             {#if authState === ApiAuthState.NotStarted || authState === ApiAuthState.Failed || authState === ApiAuthState.IpRejected}
                 <h1>Welcome</h1>
@@ -287,23 +287,32 @@
 </Loadable>
 
 <style lang="scss">
-    h1 {
-        font-size: 3rem;
+    .login-panel {
+        margin-top: 1.25rem;
+    }
+
+    .login-panel :global(.page-summary-bar) {
+        margin-bottom: .85rem;
     }
 
     .sso-buttons {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.85rem 1rem;
+        gap: .5rem;
 
         button {
             flex: 1 0 0;
             display: flex;
             align-items: center;
             justify-content: center;
-            text-wrap: nowrap;
+            min-width: 12rem;
+            white-space: nowrap;
         }
     }
 
-
+    @media (max-width: 576px) {
+        .sso-buttons button {
+            flex-basis: 100%;
+        }
+    }
 </style>

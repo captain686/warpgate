@@ -205,7 +205,24 @@ impl WebSshSession {
     }
 
     pub async fn stop_recording(&self, channel_id: Uuid) {
-        self.channel_recorders.lock().await.remove(&channel_id);
+        let recorder = self.channel_recorders.lock().await.remove(&channel_id);
+        if let Some(recorder) = recorder {
+            if let Err(e) = recorder.finish().await {
+                error!(%channel_id, ?e, "Failed to finish terminal recording");
+            }
+        }
+    }
+
+    pub async fn stop_all_recordings(&self) {
+        let recorders = {
+            let mut recorders = self.channel_recorders.lock().await;
+            std::mem::take(&mut *recorders)
+        };
+        for (channel_id, recorder) in recorders {
+            if let Err(e) = recorder.finish().await {
+                error!(%channel_id, ?e, "Failed to finish terminal recording");
+            }
+        }
     }
 
     pub fn close(&self) {

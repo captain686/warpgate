@@ -55,6 +55,7 @@
     const { sessionId } = params
 
     let sessionInfo = $state<WebSshSessionInfo | null>(null)
+    let sessionDeleteStarted = false
 
     const FONT_SIZE_MIN = 8
     const FONT_SIZE_MAX = 32
@@ -80,6 +81,40 @@
         onOpen: () => requestNewChannel(),
         onMessage: data => onMessage(JSON.parse(data) as ServerMessage),
     })
+
+    function sessionApiUrl (): string {
+        return `/@warpgate/api/web-ssh/sessions/${sessionId}`
+    }
+
+    function deleteSessionKeepalive () {
+        if (sessionDeleteStarted) {
+            return
+        }
+        sessionDeleteStarted = true
+        try {
+            void fetch(sessionApiUrl(), {
+                method: 'DELETE',
+                credentials: 'same-origin',
+                keepalive: true,
+            })
+        } catch {
+            // best effort during page unload
+        }
+    }
+
+    async function deleteSession () {
+        if (sessionDeleteStarted) {
+            return
+        }
+        sessionDeleteStarted = true
+        try {
+            await api.deleteWebSshSession({ sessionId })
+        } catch (e) {
+            if (!(e instanceof ResponseError && e.response.status === 404)) {
+                throw e
+            }
+        }
+    }
 
     function send (msg: ClientMessage) {
         ws.send(JSON.stringify(msg))
@@ -131,6 +166,7 @@
                 connectionError = msg.message
                 break
             case 'session_closed':
+                sessionDeleteStarted = true
                 ws.close()
                 ws.state = ConnectionState.Disconnected
                 connectionError = 'Session closed.'
@@ -159,9 +195,13 @@
     function closeTab (id: string) {
         send({ type: 'close_channel', channel_id: id })
         channels.delete(id)
-        channelOrder = channelOrder.filter(x => x !== id)
+        const remainingChannels = channelOrder.filter(x => x !== id)
+        channelOrder = remainingChannels
         if (activeChannelId === id) {
-            activeChannelId = channelOrder[channelOrder.length - 1] ?? null
+            activeChannelId = remainingChannels[remainingChannels.length - 1] ?? null
+        }
+        if (remainingChannels.length === 0) {
+            void closeEmptySession()
         }
     }
 
@@ -176,9 +216,27 @@
     }
 
     async function disconnect () {
+        try {
+            await deleteSession()
+        } finally {
+            ws.close()
+            window.close()
+        }
+    }
+
+    async function closeEmptySession () {
+        try {
+            await deleteSession()
+        } finally {
+            ws.close()
+            ws.state = ConnectionState.Disconnected
+            connectionError = 'Session closed.'
+        }
+    }
+
+    function closeFromPageLifecycle () {
+        deleteSessionKeepalive()
         ws.close()
-        await api.deleteWebSshSession({ sessionId })
-        window.close()
     }
 
     onMount(async () => {
@@ -204,11 +262,16 @@
     $effect(() => { document.title = windowTitle })
 
     onDestroy(() => {
-        ws.close()
+        closeFromPageLifecycle()
     })
 
     loadTheme('dark')
 </script>
+
+<svelte:window
+    on:beforeunload={closeFromPageLifecycle}
+    on:pagehide={closeFromPageLifecycle}
+/>
 
 <div class="ssh-web-client d-flex flex-column" use:observeResize style={`background-color: ${THEME.background}`}>
 
@@ -378,13 +441,17 @@
 
     .toolbar {
         flex-shrink: 0;
-        margin: 10px;
-        background: black;
-        border-radius: 10px;
+        gap: .5rem;
+        min-height: 3.25rem;
+        margin: .5rem;
+        background: rgba(0, 0, 0, .92);
+        border: 1px solid rgba(255, 255, 255, .14);
+        border-radius: 6px;
     }
 
     .tab-bar {
         overflow-x: auto;
+        scrollbar-width: thin;
     }
 
     .terminal-area {
@@ -392,14 +459,25 @@
     }
 
     .tab {
-        padding: 0;
+        max-width: 18rem;
+        min-height: 2rem;
+        padding: 0 .25rem 0 .75rem;
 
         .label {
-            margin: 0.25rem 0 0.25rem 1rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            margin: .25rem .25rem .25rem 0;
         }
 
         .close-button {
-            margin-left: 0.5rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 1.75rem;
+            min-height: 1.75rem;
+            margin-left: .25rem;
+            padding: 0;
         }
     }
 
@@ -410,6 +488,18 @@
 
         button {
             pointer-events: initial;
+        }
+    }
+
+    @media (max-width: 576px) {
+        .toolbar {
+            align-items: stretch !important;
+            flex-wrap: wrap;
+        }
+
+        .tab-bar {
+            flex-basis: 100%;
+            order: 2;
         }
     }
 

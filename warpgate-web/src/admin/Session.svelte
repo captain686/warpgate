@@ -139,6 +139,12 @@
                                 : {recording.name}
                             {/if}
                         </strong>
+                        <Badge
+                            color={recording.ended ? 'secondary' : 'success'}
+                            class="recording-status"
+                        >
+                            {recording.ended ? 'Finished' : 'Recording'}
+                        </Badge>
                         {#if metadata}
                             {#each recordingMetadataToFieldSet(metadata) as item (item[0])}
                                 <div>
@@ -147,7 +153,11 @@
                             {/each}
                         {/if}
                         <small class="meta ms-auto">
-                            {timeAgo(recording.started)}
+                            {#if recording.ended}
+                                {formatDistance(new Date(recording.started), new Date(recording.ended))}
+                            {:else}
+                                {timeAgo(recording.started)}
+                            {/if}
                         </small>
                     </div>
                 </a>
@@ -167,14 +177,31 @@
     .main {
         display: flex;
         align-items: center;
+        min-width: 0;
 
         > * {
             margin-right: 20px;
         }
     }
 
+    :global(.recording-status) {
+        flex: 0 0 auto;
+    }
+
     .meta {
         opacity: .75;
+        white-space: nowrap;
+    }
+
+    @media (max-width: 576px) {
+        .main {
+            align-items: flex-start;
+            flex-wrap: wrap;
+        }
+
+        .meta {
+            margin-left: 0 !important;
+        }
     }
 }
 </style>

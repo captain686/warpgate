@@ -26,15 +26,21 @@
     }
 
     .sectioned-form-section {
-        padding: 0 0 1.5rem;
+        padding: 0 0 1.25rem;
+        margin-bottom: 1.25rem;
+        border-bottom: 1px solid var(--bs-border-color);
     }
 
     .sectioned-form-section:last-child {
         border-bottom: none;
+        margin-bottom: 0;
     }
 
     .sectioned-form-section h4 {
         margin-top: 0;
-        margin-bottom: 1rem;
+        margin-bottom: .85rem;
+        color: var(--bs-body-color);
+        font-size: 1.05rem;
+        font-weight: 650;
     }
 </style>

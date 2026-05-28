@@ -74,6 +74,10 @@
         border-radius: var(--bs-border-radius);
         align-items: center;
         gap: .75rem;
+        transition:
+            background-color .12s ease-out,
+            color .12s ease-out,
+            transform .08s ease-out;
 
         .text {
             flex-grow: 1;
@@ -89,6 +93,7 @@
 
         &:active {
             background: var(--bs-list-group-action-active-bg);
+            transform: translateY(1px);
             .title {
                 color: var(--bs-list-group-action-active-color);
             }

@@ -121,6 +121,10 @@ impl TerminalRecorder {
         )
         .await
     }
+
+    pub async fn finish(self) -> Result<()> {
+        self.writer.finish().await
+    }
 }
 
 impl Recorder for TerminalRecorder {

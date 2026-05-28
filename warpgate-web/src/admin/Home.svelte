@@ -149,16 +149,41 @@
         .main {
             display: flex;
             align-items: center;
+            gap: .5rem;
+            min-width: 0;
         }
 
         .protocol {
             min-width: 3.5rem;
+            font-size: .78rem;
+            font-weight: 600;
+            letter-spacing: .02rem;
+            text-transform: uppercase;
         }
 
         .meta {
             opacity: .75;
-            margin-left: 25px;
+            margin-left: 1rem;
             font-size: .75rem;
+            white-space: nowrap;
+        }
+
+        strong {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+    }
+
+    @media (max-width: 576px) {
+        .list-group-item .main {
+            align-items: flex-start;
+            flex-wrap: wrap;
+        }
+
+        .list-group-item .meta {
+            margin-left: 0;
         }
     }
 </style>

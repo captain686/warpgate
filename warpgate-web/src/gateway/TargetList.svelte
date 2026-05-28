@@ -340,13 +340,11 @@ function groupInfoFromTarget (target: TargetSnapshot): GroupInfo {
                 selectTarget(target)
             }}
         >
-            <span class="me-auto">
-                <div class="d-flex align-items-center gap-2">
-                        {target.name}
-                    </div>
-                    {#if target.description}
-                        <small class="d-block text-muted">{target.description}</small>
-                    {/if}
+            <span class="target-main">
+                <span class="target-name">{target.name}</span>
+                {#if target.description}
+                    <small class="target-description text-muted">{target.description}</small>
+                {/if}
             </span>
             <small class="protocol text-muted ms-auto">
                 {#if target.kind === TargetKind.MySql}
@@ -364,7 +362,7 @@ function groupInfoFromTarget (target: TargetSnapshot): GroupInfo {
             </small>
             {#if target.kind === TargetKind.Ssh}
                 <Dropdown>
-                    <DropdownToggle color="link" size="sm" onclick={e => {
+                    <DropdownToggle color="link" size="sm" class="target-action" onclick={e => {
                         e.preventDefault()
                         e.stopPropagation()
                         void loadCredentialState().catch(() => undefined)
@@ -428,11 +426,11 @@ function groupInfoFromTarget (target: TargetSnapshot): GroupInfo {
                     </DropdownMenu>
                 </Dropdown>
             {:else if target.kind === TargetKind.Http}
-                <Button color="link" size="sm" tabindex={-1}>
+                <Button color="link" size="sm" tabindex={-1} class="target-action">
                     <Fa icon={faArrowRight} fw />
                 </Button>
             {:else}
-                <Button disabled color="link" size="sm" tabindex={-1} style="visibility: hidden">
+                <Button disabled color="link" size="sm" tabindex={-1} class="target-action" style="visibility: hidden">
                     <Fa icon={faEllipsisV} fw />
                 </Button>
             {/if}
@@ -510,5 +508,60 @@ function groupInfoFromTarget (target: TargetSnapshot): GroupInfo {
     .target-item {
         display: flex;
         align-items: center;
+        min-height: 3rem;
+    }
+
+    .target-main {
+        display: block;
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+    .target-name,
+    .target-description {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .target-name {
+        font-weight: 600;
+    }
+
+    .target-description {
+        line-height: 1.3;
+    }
+
+    .protocol {
+        flex: 0 0 5.5rem;
+        font-size: .75rem;
+        font-weight: 600;
+        letter-spacing: .02rem;
+        text-align: right;
+        text-transform: uppercase;
+    }
+
+    :global(.target-action.btn) {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 2rem;
+        width: 2rem;
+        min-height: 2rem;
+        padding: 0;
+    }
+
+    @media (max-width: 576px) {
+        .target-item {
+            align-items: flex-start;
+            flex-wrap: wrap;
+        }
+
+        .protocol {
+            flex-basis: auto;
+            margin-left: 0 !important;
+            text-align: left;
+        }
     }
 </style>

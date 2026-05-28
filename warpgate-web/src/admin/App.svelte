@@ -107,10 +107,12 @@
                 <Brand />
             </a>
             {#if $serverInfo?.username}
-                <a use:link use:active href="/">Sessions</a>
-                <a use:link use:active href="/config">Config</a>
-                <a use:link use:active href="/log">Log</a>
-                <a use:link use:active href="/gateway">Gateway</a>
+                <nav class="main-nav" aria-label="Primary">
+                    <a class="main-nav-link" use:link use:active href="/">Sessions</a>
+                    <a class="main-nav-link" use:link use:active href="/gateway">Gateway</a>
+                    <a class="main-nav-link" use:link use:active href="/config">Config</a>
+                    <a class="main-nav-link" use:link use:active href="/log">Log</a>
+                </nav>
             {/if}
             <div class="ms-auto">
                 <AuthBar />
@@ -167,7 +169,13 @@
         margin: 0 0 1rem;
         overflow-x: auto;
 
-        > a:not(.logo-link) {
+        .main-nav {
+            display: flex;
+            align-items: center;
+            gap: .2rem;
+        }
+
+        .main-nav-link {
             color: var(--bs-body-color);
             font-size: .95rem;
             font-weight: 500;
@@ -177,17 +185,47 @@
             text-decoration: none;
             white-space: nowrap;
             border-radius: var(--bs-border-radius);
+            transition:
+                background-color .12s ease-out,
+                color .12s ease-out,
+                box-shadow .12s ease-out,
+                transform .08s ease-out;
         }
 
-        > a:not(.logo-link):hover,
-        > a:not(.logo-link):global(.active) {
+        .main-nav-link:hover,
+        .main-nav-link:focus-visible {
             background: var(--bs-list-group-action-hover-bg);
             color: var(--bs-list-group-action-hover-color);
+        }
+
+        .main-nav-link:focus-visible {
+            box-shadow: 0 0 0 .15rem rgba(var(--bs-primary-rgb), .18);
+            outline: none;
+        }
+
+        .main-nav-link:active {
+            transform: translateY(1px);
+        }
+
+        .main-nav-link:global(.active) {
+            background: var(--bs-list-group-action-active-bg);
+            color: var(--bs-list-group-action-active-color);
+            box-shadow: inset 0 -2px 0 rgba(var(--bs-primary-rgb), .45);
         }
 
         .logo-link {
             flex: 0 0 auto;
             margin-right: 1rem !important;
+        }
+    }
+
+    @media (max-width: 576px) {
+        header {
+            gap: .5rem;
+        }
+
+        header .main-nav {
+            flex: 1 0 auto;
         }
     }
 

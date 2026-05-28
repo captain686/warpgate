@@ -179,5 +179,25 @@
     .list-group-item {
         display: flex;
         align-items: center;
+        gap: .75rem;
+
+        > .me-auto {
+            min-width: 0;
+        }
+
+        small {
+            line-height: 1.3;
+        }
+    }
+
+    @media (max-width: 576px) {
+        .list-group-item {
+            align-items: flex-start;
+            flex-wrap: wrap;
+        }
+
+        .list-group-item > small.ms-auto {
+            margin-left: 0 !important;
+        }
     }
 </style>

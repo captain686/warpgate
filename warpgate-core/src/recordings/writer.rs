@@ -20,6 +20,7 @@ use super::{Error, Result};
 enum RecordingWriterCommand {
     Write(Bytes),
     Flush(oneshot::Sender<()>),
+    Finish(oneshot::Sender<()>),
 }
 
 #[derive(Clone)]
@@ -66,6 +67,7 @@ impl RecordingWriter {
         });
 
         tokio::spawn(async move {
+            let mut finish_reply = None;
             try_block!(async {
                 let mut last_flush = Instant::now();
                 loop {
@@ -82,6 +84,11 @@ impl RecordingWriter {
                                 writer.flush().await?;
                                 last_flush = Instant::now();
                                 let _ = reply.send(());
+                            }
+                            Some(RecordingWriterCommand::Finish(reply)) => {
+                                writer.flush().await?;
+                                finish_reply = Some(reply);
+                                break;
                             }
                             None => break,
                         },
@@ -111,6 +118,10 @@ impl RecordingWriter {
             } catch (error: anyhow::Error) {
                 error!(%error, ?path, "Failed to write recording");
             });
+
+            if let Some(reply) = finish_reply {
+                let _ = reply.send(());
+            }
         });
 
         Ok(Self {
@@ -134,6 +145,15 @@ impl RecordingWriter {
         let (tx, rx) = oneshot::channel();
         self.sender
             .send(RecordingWriterCommand::Flush(tx))
+            .await
+            .map_err(|_| Error::Closed)?;
+        rx.await.map_err(|_| Error::Closed)
+    }
+
+    pub async fn finish(self) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(RecordingWriterCommand::Finish(tx))
             .await
             .map_err(|_| Error::Closed)?;
         rx.await.map_err(|_| Error::Closed)

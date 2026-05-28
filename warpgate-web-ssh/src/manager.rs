@@ -155,6 +155,7 @@ impl WebSshClientManager {
             session.push_event(ServerMessage::SessionClosed).await;
             session.close();
             session.abort();
+            session.stop_all_recordings().await;
         }
     }
 }
@@ -287,6 +288,7 @@ fn spawn_event_loop(
                         }
                         RCEvent::Done => {
                             session.push_event(ServerMessage::SessionClosed).await;
+                            session.stop_all_recordings().await;
                             session.close();
                             sessions.lock().await.remove(&session.id());
                             break;

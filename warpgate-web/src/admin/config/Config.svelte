@@ -177,8 +177,8 @@
 </div>
 
 <style lang="scss">
-    $sb-w: 200px;
-    $sb-m: 30px;
+    $sb-w: 220px;
+    $sb-m: 24px;
 
     .wrapper {
         display: flex;
@@ -187,10 +187,19 @@
         > .sidebar {
             width: $sb-w;
             flex: none;
+            position: sticky;
+            top: 1rem;
+            align-self: flex-start;
+            max-height: calc(100vh - 2rem);
+            padding-right: 1rem;
+            overflow-y: auto;
+            border-right: 1px solid var(--bs-border-color);
+            scrollbar-width: thin;
         }
 
         > .main {
             flex: 1 0 0;
+            min-width: 0;
             max-width: 100%;
         }
     }

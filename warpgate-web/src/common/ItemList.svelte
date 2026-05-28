@@ -150,6 +150,7 @@
 <style lang="scss">
     .list-toolbar {
         align-items: center;
+        flex-wrap: wrap;
         gap: .5rem;
         min-height: 2.25rem;
     }
@@ -157,9 +158,18 @@
     :global(.list-search.form-control) {
         background: var(--bs-body-bg);
         border-color: var(--bs-border-color);
+        min-width: 14rem;
+        max-width: 24rem;
     }
 
     .list-group:empty {
         display: none;
+    }
+
+    @media (max-width: 576px) {
+        :global(.list-search.form-control) {
+            width: 100%;
+            max-width: none;
+        }
     }
 </style>

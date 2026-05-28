@@ -60,8 +60,6 @@ enum DeleteWebSshSessionResponse {
     Deleted,
     #[oai(status = 403)]
     Forbidden,
-    #[oai(status = 404)]
-    NotFound,
 }
 
 #[OpenApi]
@@ -167,7 +165,7 @@ impl Api {
         _sec_scheme: AnySecurityScheme,
     ) -> poem::Result<DeleteWebSshSessionResponse> {
         let Some(session) = manager.get_session(*session_id).await else {
-            return Ok(DeleteWebSshSessionResponse::NotFound);
+            return Ok(DeleteWebSshSessionResponse::Deleted);
         };
 
         if session.user_id() != ctx.auth.user_id() {

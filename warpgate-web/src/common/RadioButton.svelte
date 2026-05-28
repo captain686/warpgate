@@ -38,6 +38,21 @@
 <style lang="scss">
     :global .btn-radio-button {
         text-align: left;
+        border-color: var(--bs-border-color);
+
+        &:hover {
+            background: var(--bs-list-group-action-hover-bg);
+            border-color: var(--bs-border-color);
+        }
+
+        &:active {
+            transform: translateY(1px);
+        }
+
+        &.active {
+            background: var(--bs-list-group-action-active-bg);
+            border-color: var(--bs-border-color);
+        }
 
         label {
             margin-left: .75rem;

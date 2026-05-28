@@ -68,21 +68,22 @@
 
 <style lang="scss">
     .getting-started-help {
-        margin-bottom: 3rem;
-        border-top: 1px solid transparent;
-        border-bottom: 1px solid transparent;
-        padding: 1.5rem 0.5rem;
+        margin-bottom: 1.5rem;
+        border-top: 1px solid var(--bs-border-color);
+        border-bottom: 1px solid var(--bs-border-color);
+        padding: 1rem 0;
 
         .heading {
             display: flex;
             align-items: center;
-            gap: 1rem;
-            margin-bottom: 1rem;
+            gap: .75rem;
+            margin-bottom: .65rem;
         }
 
         h2 {
-            font-family: 'Poppins';
-            font-weight: 700;
+            font-family: inherit;
+            font-size: 1.05rem;
+            font-weight: 650;
             margin: 0;
         }
 
@@ -95,7 +96,13 @@
         }
 
         .item-text {
-            margin-left: 1rem;
+            min-width: 0;
+            margin-left: .75rem;
+
+            small {
+                color: var(--bs-secondary-color);
+                line-height: 1.3;
+            }
         }
     }
 </style>

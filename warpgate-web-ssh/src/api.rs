@@ -50,6 +50,7 @@ pub async fn ws_handler(
 
     Ok(ws.on_upgrade(move |socket| async move {
         let (mut sink, mut stream) = socket.split();
+        let mut client_closed = false;
 
         // drain buffered events first (in case of a reconnect)
         for msg in session.drain_buffer().await {
@@ -87,7 +88,11 @@ pub async fn ws_handler(
                                 break;
                             }
                         }
-                        Some(Ok(Message::Close(_))) | None => break,
+                        Some(Ok(Message::Close(_))) => {
+                            client_closed = true;
+                            break;
+                        }
+                        None => break,
                         _ => {}
                     }
                 }
@@ -105,7 +110,11 @@ pub async fn ws_handler(
             let _ = pending.reply.send(false);
         }
 
-        session.start_disconnect_timer(manager.clone()).await;
+        if client_closed {
+            manager.remove_session(session_id).await;
+        } else {
+            session.start_disconnect_timer(manager.clone()).await;
+        }
     }))
 }
 

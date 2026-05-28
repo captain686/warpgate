@@ -16,18 +16,23 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        width: 50%;
-        min-width: 200px;
+        width: 100%;
+        max-width: 34rem;
         text-align: center;
-        margin: 4rem auto;
-        opacity: .5;
+        margin: 2.5rem auto;
+        padding: 1rem 0;
+        color: var(--bs-secondary-color);
     }
 
     h2 {
-        font-family: 'Poppins';
+        font-family: inherit;
+        font-size: 1.05rem;
+        font-weight: 650;
+        margin-bottom: .35rem;
     }
 
     p {
-        font-size: .9rem;
+        font-size: .88rem;
+        margin-bottom: 0;
     }
 </style>

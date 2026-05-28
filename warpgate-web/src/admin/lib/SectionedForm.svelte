@@ -137,7 +137,6 @@
         </div>
     {/if}
 
-    <!-- Content -->
     <div class="sectioned-form-content" bind:this={containerElement}>
         {@render props.children?.()}
     </div>
@@ -153,8 +152,8 @@
         position: sticky;
         top: 0;
         z-index: 10;
-        height: 60px;
-        margin-bottom: -60px;
+        height: 48px;
+        margin-bottom: -48px;
         transition: opacity 120ms ease-out;
     }
 
@@ -172,9 +171,18 @@
         border-bottom: 1px solid var(--bs-border-color);
         background: var(--bs-body-bg);
         transition: opacity 120ms ease;
-
         flex-wrap: nowrap;
         white-space: nowrap;
+
+        :global(.nav) {
+            padding: .35rem 0 !important;
+            scrollbar-width: thin;
+        }
+
+        :global(.nav-link) {
+            font-size: .85rem;
+            line-height: 1.2;
+        }
     }
 
     .sectioned-form-content {
