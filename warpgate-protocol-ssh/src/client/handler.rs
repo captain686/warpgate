@@ -1,7 +1,7 @@
 use russh::Channel;
 use russh::client::{Msg, Session};
 use russh::keys::{PublicKey, PublicKeyBase64};
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
 use tracing::*;
 use warpgate_common::{SessionId, TargetSSHOptions};
@@ -23,7 +23,7 @@ pub enum ClientHandlerEvent {
 
 pub struct ClientHandler {
     pub ssh_options: TargetSSHOptions,
-    pub event_tx: UnboundedSender<ClientHandlerEvent>,
+    pub event_tx: Sender<ClientHandlerEvent>,
     pub services: Services,
     pub session_id: SessionId,
 }
@@ -52,6 +52,7 @@ impl russh::client::Handler for ClientHandler {
             .send(ClientHandlerEvent::HostKeyReceived(
                 server_public_key.clone(),
             ))
+            .await
             .map_err(|_| ClientHandlerError::ConnectionError(ConnectionError::Internal))?;
         match known_hosts
             .validate(
@@ -85,6 +86,7 @@ impl russh::client::Handler for ClientHandler {
                         server_public_key.clone(),
                         tx,
                     ))
+                    .await
                     .map_err(|_| ClientHandlerError::Internal)?;
                 let accepted = rx.await.map_err(|_| ClientHandlerError::Internal)?;
                 if accepted {
@@ -121,15 +123,18 @@ impl russh::client::Handler for ClientHandler {
     ) -> Result<(), Self::Error> {
         let connected_address = connected_address.to_string();
         let originator_address = originator_address.to_string();
-        let _ = self.event_tx.send(ClientHandlerEvent::ForwardedTcpIp(
-            channel,
-            ForwardedTcpIpParams {
-                connected_address,
-                connected_port,
-                originator_address,
-                originator_port,
-            },
-        ));
+        let _ = self
+            .event_tx
+            .send(ClientHandlerEvent::ForwardedTcpIp(
+                channel,
+                ForwardedTcpIpParams {
+                    connected_address,
+                    connected_port,
+                    originator_address,
+                    originator_port,
+                },
+            ))
+            .await;
         Ok(())
     }
 
@@ -141,11 +146,14 @@ impl russh::client::Handler for ClientHandler {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         let originator_address = originator_address.to_string();
-        let _ = self.event_tx.send(ClientHandlerEvent::X11(
-            channel,
-            originator_address,
-            originator_port,
-        ));
+        let _ = self
+            .event_tx
+            .send(ClientHandlerEvent::X11(
+                channel,
+                originator_address,
+                originator_port,
+            ))
+            .await;
         Ok(())
     }
 
@@ -156,10 +164,13 @@ impl russh::client::Handler for ClientHandler {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         let socket_path = socket_path.to_string();
-        let _ = self.event_tx.send(ClientHandlerEvent::ForwardedStreamlocal(
-            channel,
-            ForwardedStreamlocalParams { socket_path },
-        ));
+        let _ = self
+            .event_tx
+            .send(ClientHandlerEvent::ForwardedStreamlocal(
+                channel,
+                ForwardedStreamlocalParams { socket_path },
+            ))
+            .await;
         Ok(())
     }
 
@@ -170,14 +181,22 @@ impl russh::client::Handler for ClientHandler {
     ) -> Result<(), Self::Error> {
         let _ = self
             .event_tx
-            .send(ClientHandlerEvent::ForwardedAgent(channel));
+            .send(ClientHandlerEvent::ForwardedAgent(channel))
+            .await;
         Ok(())
     }
 }
 
 impl Drop for ClientHandler {
     fn drop(&mut self) {
-        let _ = self.event_tx.send(ClientHandlerEvent::Disconnect);
+        let event_tx = self.event_tx.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let _ = event_tx.send(ClientHandlerEvent::Disconnect).await;
+            });
+        } else {
+            let _ = self.event_tx.try_send(ClientHandlerEvent::Disconnect);
+        }
         debug!(session=%self.session_id, "Dropped");
     }
 }

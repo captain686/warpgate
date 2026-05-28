@@ -131,16 +131,22 @@ struct IssuedPublicKeyCredential {
 }
 
 fn abbreviate_public_key(k: &str) -> String {
-    let l = 10;
-    if k.len() <= l {
-        return k.to_string(); // Return the full key if it's shorter than or equal to `l`.
+    const VISIBLE_CHARS: usize = 10;
+    let char_count = k.chars().count();
+    if char_count <= VISIBLE_CHARS {
+        return k.to_string();
     }
 
-    format!(
-        "{}...{}",
-        &k[..l.min(k.len())],            // Take the first `l` characters.
-        &k[k.len().saturating_sub(l)..]  // Take the last `l` characters safely.
-    )
+    let prefix = k.chars().take(VISIBLE_CHARS).collect::<String>();
+    let suffix = k
+        .chars()
+        .rev()
+        .take(VISIBLE_CHARS)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
+    format!("{prefix}...{suffix}")
 }
 
 fn normalize_public_key(openssh_public_key: &str) -> Result<String, WarpgateError> {

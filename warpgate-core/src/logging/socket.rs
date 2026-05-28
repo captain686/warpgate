@@ -34,14 +34,10 @@ where
             return;
         }
         values.insert("target", target);
-        #[allow(clippy::unwrap_used, reason = "never fails")]
-        values.insert(
-            "timestamp",
-            OffsetDateTime::now_local()
-                .unwrap()
-                .format(&Rfc3339)
-                .unwrap(),
-        );
+        let Ok(timestamp) = OffsetDateTime::now_utc().format(&Rfc3339) else {
+            return;
+        };
+        values.insert("timestamp", timestamp);
         let _ = tx.try_send(values);
     });
 
@@ -61,7 +57,7 @@ where
                 continue;
             };
 
-            let buffer = BytesMut::from(&serialized[..]);
+            let buffer = BytesMut::from(serialized.as_slice());
             if let Err(error) = socket.send_to(buffer.as_ref(), socket_address).await {
                 error!(%error, is_socket_logging_error=true, "Failed to forward log entry");
             }

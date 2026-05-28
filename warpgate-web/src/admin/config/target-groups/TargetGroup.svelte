@@ -9,6 +9,7 @@
     import { replace } from 'svelte-spa-router'
     import Alert from 'common/sveltestrap-s5-ports/Alert.svelte'
     import { adminPermissions } from 'admin/lib/store'
+    import ConfirmModal from 'common/ConfirmModal.svelte'
 
     interface Props {
         params: { id: string };
@@ -20,6 +21,7 @@
     let group: TargetGroup | undefined = $state()
     let error: string | undefined = $state()
     let saving = $state(false)
+    let deleteGroupModalOpen = $state(false)
 
     let name = $state('')
     let description = $state('')
@@ -64,8 +66,12 @@
         }
     }
 
+    function requestRemove () {
+        deleteGroupModalOpen = true
+    }
+
     async function remove () {
-        if (!group || !confirm(`Delete target group "${group.name}"?`)) {
+        if (!group) {
             return
         }
 
@@ -151,7 +157,7 @@
                 >Update</AsyncButton>
                 <Button
                     color="danger"
-                    onclick={remove}
+                    onclick={requestRemove}
                     disabled={!$adminPermissions.targetsDelete}
                 >Remove</Button>
             </div>
@@ -159,6 +165,14 @@
     </div>
 {/if}
 </Loadable>
+
+<ConfirmModal
+    bind:isOpen={deleteGroupModalOpen}
+    title="Delete target group"
+    message={`Delete target group "${group?.name ?? ''}"?`}
+    confirmLabel="Delete"
+    onConfirm={remove}
+/>
 
 <style lang="scss">
     .color-picker {

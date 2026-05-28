@@ -19,6 +19,7 @@
     import SectionedForm from 'admin/lib/SectionedForm.svelte'
     import Section from 'admin/lib/Section.svelte'
     import { formatDurationAsHumantime, parseHumantimeDuration } from 'common/duration'
+    import ConfirmModal from 'common/ConfirmModal.svelte'
 
     interface Props {
         params: { id: string };
@@ -31,6 +32,7 @@
     let target: Target | undefined = $state()
     let roleIsAllowed: Record<string, any> = $state({})
     let connectionsInstructionsModalOpen = $state(false)
+    let deleteTargetModalOpen = $state(false)
     let groups: TargetGroup[] = $state([])
     let ticketDurationText = $state('')
 
@@ -65,11 +67,13 @@
         }
     }
 
+    function requestRemove () {
+        deleteTargetModalOpen = true
+    }
+
     async function remove () {
-        if (confirm(`Delete target ${target!.name}?`)) {
-            await api.deleteTarget(target!)
-            replace('/config/targets')
-        }
+        await api.deleteTarget(target!)
+        replace('/config/targets')
     }
 
     async function toggleRole (role: Role) {
@@ -479,8 +483,16 @@
 
         <AsyncButton
             color="danger"
-            click={remove}
+            click={requestRemove}
             disabled={!$adminPermissions.targetsDelete}
         >Remove</AsyncButton>
     </StickyActionBar>
 </div>
+
+<ConfirmModal
+    bind:isOpen={deleteTargetModalOpen}
+    title="Delete target"
+    message={`Delete target ${target?.name ?? ''}?`}
+    confirmLabel="Delete"
+    onConfirm={remove}
+/>

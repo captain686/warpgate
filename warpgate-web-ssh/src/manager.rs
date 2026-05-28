@@ -119,6 +119,7 @@ impl WebSshClientManager {
                     session.push_event(ServerMessage::SessionClosed).await;
                     session.abort();
                     session.close();
+                    session.end_core_session().await;
                 }
             }
         });
@@ -131,6 +132,7 @@ impl WebSshClientManager {
         rc_handles
             .command_tx
             .send((RCCommand::Connect(ssh_options.clone()), None))
+            .await
             .ok();
 
         spawn_event_loop(
@@ -151,10 +153,12 @@ impl WebSshClientManager {
     }
 
     pub async fn remove_session(&self, id: Uuid) {
-        if let Some(session) = self.sessions.lock().await.remove(&id) {
+        let session = self.sessions.lock().await.remove(&id);
+        if let Some(session) = session {
             session.push_event(ServerMessage::SessionClosed).await;
             session.close();
             session.abort();
+            session.end_core_session().await;
             session.stop_all_recordings().await;
         }
     }
@@ -288,6 +292,7 @@ fn spawn_event_loop(
                         }
                         RCEvent::Done => {
                             session.push_event(ServerMessage::SessionClosed).await;
+                            session.end_core_session().await;
                             session.stop_all_recordings().await;
                             session.close();
                             sessions.lock().await.remove(&session.id());

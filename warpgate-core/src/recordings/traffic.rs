@@ -95,7 +95,7 @@ impl ConnectionRecorder {
         self.writer
             .write(&u32::to_le_bytes(data.len() as u32))
             .await?;
-        self.writer.write(&data).await?;
+        self.writer.write_bytes(data).await?;
         Ok(())
     }
 

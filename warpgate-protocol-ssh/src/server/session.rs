@@ -14,7 +14,7 @@ use futures::{Future, FutureExt};
 use russh::keys::{PublicKey, PublicKeyBase64};
 use russh::{MethodKind, MethodSet, Sig};
 use termcolor::Color;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{Sender, UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Mutex, broadcast, oneshot};
 use tracing::*;
 use uuid::Uuid;
@@ -90,7 +90,7 @@ pub struct ServerSession {
     channel_recorders: HashMap<Uuid, TerminalRecorder>,
     channel_map: BiMap<ServerChannelId, Uuid>,
     channel_pty_size_map: HashMap<Uuid, PtyRequest>,
-    rc_tx: UnboundedSender<(RCCommand, Option<RCCommandReply>)>,
+    rc_tx: Sender<(RCCommand, Option<RCCommandReply>)>,
     rc_abort_tx: UnboundedSender<()>,
     rc_state: RCState,
     remote_address: SocketAddr,
@@ -322,7 +322,7 @@ impl ServerSession {
             .ok_or_else(|| anyhow::anyhow!("Channel not known"))
     }
 
-    pub fn emit_service_message(&self, msg: &str) -> Result<()> {
+    pub async fn emit_service_message(&self, msg: &str) -> Result<()> {
         debug!("Service message: {}", msg);
 
         let output = format!(
@@ -331,17 +331,20 @@ impl ServerSession {
             ansi_paint(Color::Black, Color::White, " Warpgate "),
             msg.replace('\n', "\r\n"),
         );
-        self.emit_pty_output(output.as_bytes())?;
+        self.emit_pty_output(output.as_bytes()).await?;
 
         Ok(())
     }
 
-    pub fn emit_pty_output(&self, data: &[u8]) -> Result<()> {
+    pub async fn emit_pty_output(&self, data: &[u8]) -> Result<()> {
         let channels = self.pty_channels.clone();
+        let data = Bytes::copy_from_slice(data);
         for channel in channels {
             let channel = self.map_channel_reverse(&channel)?;
             if let Some(session) = self.session_handle.clone() {
-                self.channel_writer.write(session, channel.0, data);
+                self.channel_writer
+                    .write(session, channel.0, data.clone())
+                    .await?;
             }
         }
         Ok(())
@@ -363,25 +366,32 @@ impl ServerSession {
                 anyhow::bail!("Invalid session state (target not set)")
             }
             TargetSelection::NotFound(name) => {
-                self.emit_service_message(&format!("Selected target not found: {name}"))?;
+                self.emit_service_message(&format!("Selected target not found: {name}"))
+                    .await?;
                 self.disconnect_server().await;
                 anyhow::bail!("Target not found: {name}");
             }
             TargetSelection::Found(target, ssh_options) => {
                 if self.rc_state == RCState::NotInitialized {
-                    self.connect_remote(&target, ssh_options)?;
+                    self.connect_remote(&target, ssh_options).await?;
                 }
             }
         }
         Ok(())
     }
 
-    fn connect_remote(&mut self, target: &Target, ssh_options: TargetSSHOptions) -> Result<()> {
+    async fn connect_remote(
+        &mut self,
+        target: &Target,
+        ssh_options: TargetSSHOptions,
+    ) -> Result<()> {
         self.rc_state = RCState::Connecting;
         self.send_command(RCCommand::Connect(ssh_options))
+            .await
             .map_err(|_| anyhow::anyhow!("cannot send command"))?;
         self.service_output.show_progress();
-        self.emit_service_message(&format!("Selected target: {}", target.name))?;
+        self.emit_service_message(&format!("Selected target: {}", target.name))
+            .await?;
 
         Ok(())
     }
@@ -419,7 +429,7 @@ impl ServerSession {
                     }
                 }
                 Event::ServiceOutput(data) => {
-                    let _ = self.emit_pty_output(&data);
+                    let _ = self.emit_pty_output(&data).await;
                 }
                 Event::ConsoleInput(_) => (),
             }
@@ -505,10 +515,11 @@ impl ServerSession {
                 let channel_id = self.map_channel(server_channel_id)?;
                 let _ = self.maybe_connect_remote().await;
 
-                let _ = self.send_command(RCCommand::Channel(
+                self.send_command(RCCommand::Channel(
                     channel_id,
                     ChannelOperation::RequestShell,
-                ));
+                ))
+                .await?;
 
                 self.start_terminal_recording(
                     channel_id,
@@ -553,7 +564,7 @@ impl ServerSession {
             }
 
             ServerHandlerEvent::ExtendedData(channel, data, code, reply) => {
-                self._extended_data(channel, code, data)?;
+                self._extended_data(channel, code, data).await?;
                 let _ = reply.send(());
             }
 
@@ -563,7 +574,7 @@ impl ServerSession {
             }
 
             ServerHandlerEvent::ChannelEof(channel, reply) => {
-                self._channel_eof(channel)?;
+                self._channel_eof(channel).await?;
                 let _ = reply.send(());
             }
 
@@ -634,7 +645,7 @@ impl ServerSession {
     pub async fn handle_session_control(&mut self, command: SessionHandleCommand) -> Result<()> {
         match command {
             SessionHandleCommand::Close => {
-                let _ = self.emit_service_message("Session closed by admin");
+                let _ = self.emit_service_message("Session closed by admin").await;
                 info!("Session closed by admin");
                 self.request_disconnect();
                 self.disconnect_server().await;
@@ -655,7 +666,7 @@ impl ServerSession {
                             ERASE_PROGRESS_SPINNER,
                             ansi_paint(Color::Black, Color::Green, " ✓ Warpgate connected ")
                         );
-                        let _ = self.emit_pty_output(msg.as_bytes());
+                        let _ = self.emit_pty_output(msg.as_bytes()).await;
                     }
                     RCState::Disconnected => {
                         self.service_output.stop_progress();
@@ -685,13 +696,15 @@ impl ServerSession {
                             received_key_type,
                             received_key_base64
                         );
-                        self.emit_service_message(&msg)?;
+                        self.emit_service_message(&msg).await?;
                         self.emit_service_message(
                             "If you know that the key is correct (e.g. it has been changed),",
-                        )?;
+                        )
+                        .await?;
                         self.emit_service_message(
                             "you can remove the old key in the Warpgate management UI and try again",
                         )
+                        .await
                         ?;
                     }
                     ConnectionError::Authentication => {
@@ -704,7 +717,7 @@ impl ServerSession {
                                 " ✗ SSH target rejected Warpgate authentication request "
                             )
                         );
-                        let _ = self.emit_pty_output(msg.as_bytes());
+                        let _ = self.emit_pty_output(msg.as_bytes()).await;
                     }
                     error => {
                         let msg = format!(
@@ -713,13 +726,13 @@ impl ServerSession {
                             ansi_paint(Color::Black, Color::Red, " ✗ Connection failed "),
                             error
                         );
-                        let _ = self.emit_pty_output(msg.as_bytes());
+                        let _ = self.emit_pty_output(msg.as_bytes()).await;
                     }
                 }
             }
             RCEvent::Error(e) => {
                 self.service_output.stop_progress();
-                let _ = self.emit_service_message(&format!("Error: {e}"));
+                let _ = self.emit_service_message(&format!("Error: {e}")).await;
                 self.disconnect_server().await;
             }
             RCEvent::Output(channel, data) => {
@@ -742,7 +755,8 @@ impl ServerSession {
                 let server_channel_id = self.map_channel_reverse(&channel)?;
                 if let Some(session) = self.session_handle.clone() {
                     self.channel_writer
-                        .write(session, server_channel_id.0, data);
+                        .write(session, server_channel_id.0, data)
+                        .await?;
                 }
             }
             RCEvent::Success(channel) => {
@@ -841,7 +855,8 @@ impl ServerSession {
                 let server_channel_id = self.map_channel_reverse(&channel)?;
                 if let Some(session) = self.session_handle.clone() {
                     self.channel_writer
-                        .write_extended(session, server_channel_id.0, ext, data);
+                        .write_extended(session, server_channel_id.0, ext, data)
+                        .await?;
                 }
             }
             RCEvent::HostKeyReceived(key) => {
@@ -849,7 +864,8 @@ impl ServerSession {
                     "Host key ({}): {}",
                     key.algorithm(),
                     key.public_key_base64()
-                ))?;
+                ))
+                .await?;
             }
             RCEvent::HostKeyUnknown(key, reply) => {
                 self.handle_unknown_host_key(key, reply).await?;
@@ -992,8 +1008,9 @@ impl ServerSession {
         self.emit_service_message(&format!(
             "There is no trusted {} key for this host.",
             key.algorithm()
-        ))?;
-        self.emit_service_message("Trust this key? (y/n)")?;
+        ))
+        .await?;
+        self.emit_service_message("Trust this key? (y/n)").await?;
 
         let mut sub = self
             .hub
@@ -1005,10 +1022,10 @@ impl ServerSession {
             loop {
                 match sub.recv().await {
                     Some(Event::ConsoleInput(data)) => {
-                        if &data[..] == b"y" {
+                        if data.as_ref() == b"y" {
                             let _ = reply.send(true);
                             break;
-                        } else if &data[..] == b"n" {
+                        } else if data.as_ref() == b"n" {
                             let _ = reply.send(false);
                             break;
                         }
@@ -1172,10 +1189,11 @@ impl ServerSession {
             Ok::<&str, _>(command) => {
                 debug!(channel=%channel_id, %command, "Requested exec");
                 let _ = self.maybe_connect_remote().await;
-                let _ = self.send_command(RCCommand::Channel(
+                self.send_command(RCCommand::Channel(
                     channel_id,
                     ChannelOperation::RequestExec(command.to_string()),
-                ));
+                ))
+                .await?;
             }
         }
 
@@ -1323,22 +1341,24 @@ impl ServerSession {
                 .await;
         }
 
-        let _ = self.send_command(RCCommand::Channel(channel_id, ChannelOperation::Data(data)));
+        self.send_command(RCCommand::Channel(channel_id, ChannelOperation::Data(data)))
+            .await?;
         Ok(())
     }
 
-    fn _extended_data(
-        &self,
+    async fn _extended_data(
+        &mut self,
         server_channel_id: ServerChannelId,
         code: u32,
         data: Bytes,
     ) -> Result<()> {
         let channel_id = self.map_channel(server_channel_id)?;
         debug!(channel=%server_channel_id.0, ?data, "Data");
-        let _ = self.send_command(RCCommand::Channel(
+        self.send_command(RCCommand::Channel(
             channel_id,
             ChannelOperation::ExtendedData { ext: code, data },
-        ));
+        ))
+        .await?;
         Ok(())
     }
 
@@ -1729,30 +1749,40 @@ impl ServerSession {
                 let cp = self.services.config_provider.clone();
 
                 let state_arc = self.get_auth_state(username).await?;
-                let mut state = state_arc.lock().await;
-
-                if let Some(credential) = credential
+                let credential = if let Some(credential) = credential
                     && cp
                         .lock()
                         .await
                         .validate_credential(username, &credential, Some(target_name))
                         .await?
                 {
-                    state.add_valid_credential(credential);
-                }
+                    Some(credential)
+                } else {
+                    None
+                };
 
-                let user_auth_result = state.verify();
+                let (state_id, user_auth_result, matched_public_key_credential) = {
+                    let mut state = state_arc.lock().await;
+                    if let Some(credential) = credential {
+                        state.add_valid_credential(credential);
+                    }
+                    let user_auth_result = state.verify();
+                    let matched_public_key_credential =
+                        if matches!(user_auth_result, AuthResult::Accepted { .. }) {
+                            state.valid_public_key_credential()
+                        } else {
+                            None
+                        };
+                    (*state.id(), user_auth_result, matched_public_key_credential)
+                };
 
-                match user_auth_result {
+                match user_auth_result.clone() {
                     AuthResult::Accepted { user_info } => {
-                        let matched_public_key_credential = state.valid_public_key_credential();
-
                         self.services
                             .auth_state_store
                             .lock()
                             .await
-                            .complete(state.id())
-                            .await;
+                            .complete_with_result(&state_id, user_auth_result);
                         let target_auth_result = {
                             self.services
                                 .config_provider
@@ -1859,10 +1889,11 @@ impl ServerSession {
         Ok(())
     }
 
-    fn _channel_eof(&self, server_channel_id: ServerChannelId) -> Result<()> {
+    async fn _channel_eof(&mut self, server_channel_id: ServerChannelId) -> Result<()> {
         let channel_id = self.map_channel(server_channel_id)?;
         debug!(channel=%channel_id, "EOF");
-        let _ = self.send_command(RCCommand::Channel(channel_id, ChannelOperation::Eof));
+        self.send_command(RCCommand::Channel(channel_id, ChannelOperation::Eof))
+            .await?;
         Ok(())
     }
 
@@ -1881,13 +1912,16 @@ impl ServerSession {
         Ok(())
     }
 
-    fn send_command(&self, command: RCCommand) -> Result<(), RCCommand> {
-        self.rc_tx.send((command, None)).map_err(|e| e.0.0)
+    async fn send_command(&mut self, command: RCCommand) -> Result<(), SshClientError> {
+        self.rc_tx
+            .send((command, None))
+            .await
+            .map_err(|_| SshClientError::MpscError)
     }
 
     async fn send_command_and_wait(&mut self, command: RCCommand) -> Result<(), SshClientError> {
         let (tx, rx) = oneshot::channel();
-        let mut cmd = match self.rc_tx.send((command, Some(tx))) {
+        let mut cmd = match self.rc_tx.send((command, Some(tx))).await {
             Ok(()) => PendingCommand::Waiting(rx),
             Err(_) => PendingCommand::Failed,
         };
@@ -1917,9 +1951,6 @@ impl ServerSession {
     fn request_disconnect(&self) {
         debug!("Disconnecting");
         let _ = self.rc_abort_tx.send(());
-        if self.rc_state != RCState::NotInitialized && self.rc_state != RCState::Disconnected {
-            let _ = self.send_command(RCCommand::Disconnect);
-        }
     }
 
     async fn disconnect_server(&mut self) {

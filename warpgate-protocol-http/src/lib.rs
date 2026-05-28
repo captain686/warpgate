@@ -26,7 +26,7 @@ use tokio::sync::Mutex;
 use tracing::{Instrument, debug};
 use warpgate_admin::admin_api_app;
 use warpgate_common::version::warpgate_version;
-use warpgate_common::{GlobalParams, ListenEndpoint, WarpgateConfig};
+use warpgate_common::{GlobalParams, ListenEndpoint, WarpgateConfig, WarpgateError};
 use warpgate_common_http::auth::UnauthenticatedRequestContext;
 use warpgate_common_http::ext::construct_external_url;
 use warpgate_common_http::logging::{
@@ -167,6 +167,12 @@ impl ProtocolServer for HTTPProtocolServer {
                         );
                         None
                     }
+                }
+                Err(WarpgateError::ExternalHostUnknown) => {
+                    tracing::debug!(
+                        "No external_host configured. Cookies will be scoped to the request host."
+                    );
+                    None
                 }
                 Err(e) => {
                     tracing::warn!(

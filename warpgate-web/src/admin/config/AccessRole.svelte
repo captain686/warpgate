@@ -9,6 +9,7 @@
     import ItemList, { type PaginatedResponse } from 'common/ItemList.svelte'
     import * as rx from 'rxjs'
     import { adminPermissions } from '../lib/store'
+    import ConfirmModal from 'common/ConfirmModal.svelte'
 
     interface Props {
         params: { id: string };
@@ -18,6 +19,7 @@
 
     let error: string|null = $state(null)
     let role: Role | undefined = $state()
+    let deleteRoleModalOpen = $state(false)
     const initPromise = init()
 
     async function init () {
@@ -59,11 +61,13 @@
         }
     }
 
+    function requestRemove () {
+        deleteRoleModalOpen = true
+    }
+
     async function remove () {
-        if (confirm(`Delete role ${role!.name}?`)) {
-            await api.deleteRole(role!)
-            replace('/config/access-roles')
-        }
+        await api.deleteRole(role!)
+        replace('/config/access-roles')
     }
 </script>
 
@@ -119,7 +123,7 @@
             class="ms-2"
             disabled={!$adminPermissions.accessRolesDelete}
             color="danger"
-            click={remove}
+            click={requestRemove}
         >Remove</AsyncButton>
     </div>
 
@@ -169,3 +173,11 @@
         {/snippet}
     </ItemList>
 </div>
+
+<ConfirmModal
+    bind:isOpen={deleteRoleModalOpen}
+    title="Delete access role"
+    message={`Delete role ${role?.name ?? ''}?`}
+    confirmLabel="Delete"
+    onConfirm={remove}
+/>

@@ -176,11 +176,16 @@ impl Api {
         Parameters::Entity::update(parameters).exec(&*db).await?;
         drop(db);
 
+        let session_states = {
+            let state = services.state.lock().await;
+            state.sessions.values().cloned().collect::<Vec<_>>()
+        };
+
         services
             .rate_limiter_registry
             .lock()
             .await
-            .apply_new_rate_limits(&*services.state.lock().await)
+            .apply_new_rate_limits(&session_states)
             .await?;
 
         Ok(UpdateParametersResponse::Done)

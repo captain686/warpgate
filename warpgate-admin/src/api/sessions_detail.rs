@@ -93,11 +93,14 @@ impl Api {
     ) -> Result<CloseSessionResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::SessionsTerminate)).await?;
 
-        let state = ctx.services().state.lock().await;
+        let mut state = ctx.services().state.lock().await;
 
-        if let Some(s) = state.sessions.get(&id) {
-            let mut session = s.lock().await;
-            session.handle.close();
+        if let Some(s) = state.sessions.get(&id).cloned() {
+            {
+                let mut session = s.lock().await;
+                session.handle.close();
+            }
+            state.remove_session(*id).await;
             Ok(CloseSessionResponse::Ok)
         } else {
             Ok(CloseSessionResponse::NotFound)

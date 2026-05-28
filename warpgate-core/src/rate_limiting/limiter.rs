@@ -1,5 +1,5 @@
 use std::fmt::Debug;
-use std::num::{NonZero, NonZeroU32};
+use std::num::NonZeroU32;
 
 use governor::Quota;
 use governor::clock::{Clock, QuantaClock, QuantaInstant};
@@ -15,14 +15,11 @@ pub fn new_rate_limiter(bytes_per_second: NonZeroU32) -> InnerRateLimiter {
     // Keep the burst capacity high to allow checking in large buffers but
     // consume (burst - per_second) cells initially to ensure that
     // the rate limiter is in its "normal" state
-    #[allow(clippy::unwrap_used)] // checked
     for key in [RateLimiterDirection::Read, RateLimiterDirection::Write] {
-        let _ = rate_limiter.check_key_n(
-            &key,
-            (u32::from(max_cells) - u32::from(bytes_per_second))
-                .try_into()
-                .unwrap(),
-        );
+        let initial_debit = u32::from(max_cells).saturating_sub(u32::from(bytes_per_second));
+        if let Some(initial_debit) = NonZeroU32::new(initial_debit) {
+            let _ = rate_limiter.check_key_n(&key, initial_debit);
+        }
     }
     rate_limiter
 }
@@ -97,7 +94,8 @@ impl WarpgateRateLimiter {
         let Some(ref inner) = self.inner else {
             return Ok(None);
         };
-        let Some(bytes) = NonZero::new(bytes as u32) else {
+        let bytes = u32::try_from(bytes).unwrap_or(u32::MAX);
+        let Some(bytes) = NonZeroU32::new(bytes) else {
             return Ok(None);
         };
         match inner.0.check_key_n(&direction, bytes)? {

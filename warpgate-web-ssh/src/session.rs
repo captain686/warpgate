@@ -6,7 +6,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use russh::keys::PublicKey;
 use tokio::sync::futures::Notified;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{Sender, UnboundedSender};
 use tokio::sync::{Mutex, Notify, oneshot};
 use tokio::task::JoinHandle;
 use tracing::{error, info};
@@ -52,10 +52,10 @@ pub struct WebSshSession {
     target_name: String,
     target_kind: TargetKind,
 
-    // prevents the handle from getting dropped too early
-    _server_handle: Arc<Mutex<WarpgateServerHandle>>,
+    // Keeps the core session alive while the WebSSH session exists.
+    server_handle: Arc<Mutex<WarpgateServerHandle>>,
 
-    command_tx: UnboundedSender<(RCCommand, Option<RCCommandReply>)>,
+    command_tx: Sender<(RCCommand, Option<RCCommandReply>)>,
     abort_tx: UnboundedSender<()>,
 
     // events are buffer so that we can queue and replay them
@@ -77,7 +77,7 @@ pub struct WebSshSessionInit {
     pub target_name: String,
     pub target_kind: TargetKind,
     pub server_handle: Arc<Mutex<WarpgateServerHandle>>,
-    pub command_tx: UnboundedSender<(RCCommand, Option<RCCommandReply>)>,
+    pub command_tx: Sender<(RCCommand, Option<RCCommandReply>)>,
     pub abort_tx: UnboundedSender<()>,
     pub recordings: Arc<Mutex<SessionRecordings>>,
 }
@@ -89,7 +89,7 @@ impl WebSshSession {
             user_id: init.user_id,
             target_name: init.target_name,
             target_kind: init.target_kind,
-            _server_handle: init.server_handle,
+            server_handle: init.server_handle,
             command_tx: init.command_tx,
             abort_tx: init.abort_tx,
             output_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(OUTPUT_BUFFER_CAPACITY))),
@@ -112,8 +112,8 @@ impl WebSshSession {
         self.output_notify.notify_waiters();
     }
 
-    pub async fn drain_buffer(&self) -> Vec<ServerMessage> {
-        self.output_buffer.lock().await.drain(..).collect()
+    pub async fn drain_buffer_into(&self, out: &mut Vec<ServerMessage>) {
+        out.extend(self.output_buffer.lock().await.drain(..));
     }
 
     pub fn is_dead(&self) -> bool {
@@ -231,20 +231,24 @@ impl WebSshSession {
         self.output_notify.notify_waiters();
     }
 
+    pub async fn end_core_session(&self) {
+        self.server_handle.lock().await.end_session().await;
+    }
+
     async fn command(
         &self,
         cmd: RCCommand,
-    ) -> Option<oneshot::Receiver<Result<(), SshClientError>>> {
+    ) -> Result<oneshot::Receiver<Result<(), SshClientError>>, SshClientError> {
         let (tx, rx) = oneshot::channel();
 
-        if self.command_tx.send((cmd, Some(tx))).is_err() {
-            return None;
+        if self.command_tx.send((cmd, Some(tx))).await.is_err() {
+            return Err(SshClientError::MpscError);
         }
 
-        Some(rx)
+        Ok(rx)
     }
 
-    pub async fn open_shell_channel(&self, cols: u32, rows: u32) -> Uuid {
+    pub async fn open_shell_channel(&self, cols: u32, rows: u32) -> Result<Uuid, SshClientError> {
         let channel_id = Uuid::new_v4();
 
         info!(session=%self.id, channel=%channel_id, "Opening session channel");
@@ -257,43 +261,59 @@ impl WebSshSession {
         })
         .await;
 
-        self.command(RCCommand::Channel(channel_id, ChannelOperation::OpenShell))
-            .await;
-        self.command(RCCommand::Channel(
-            channel_id,
-            ChannelOperation::RequestPty(make_pty_request(cols, rows)),
-        ))
+        let open_result = async {
+            self.command(RCCommand::Channel(channel_id, ChannelOperation::OpenShell))
+                .await?;
+            self.command(RCCommand::Channel(
+                channel_id,
+                ChannelOperation::RequestPty(make_pty_request(cols, rows)),
+            ))
+            .await?;
+            self.command(RCCommand::Channel(
+                channel_id,
+                ChannelOperation::RequestShell,
+            ))
+            .await?;
+            Ok::<(), SshClientError>(())
+        }
         .await;
-        self.command(RCCommand::Channel(
-            channel_id,
-            ChannelOperation::RequestShell,
-        ))
-        .await;
-        channel_id
+        if let Err(error) = open_result {
+            self.stop_recording(channel_id).await;
+            return Err(error);
+        }
+        Ok(channel_id)
     }
 
-    pub async fn send_input(&self, channel_id: Uuid, data: Bytes) {
+    pub async fn send_input(&self, channel_id: Uuid, data: Bytes) -> Result<(), SshClientError> {
         self.command(RCCommand::Channel(channel_id, ChannelOperation::Data(data)))
-            .await;
+            .await?;
+        Ok(())
     }
 
-    pub async fn resize_channel(&self, channel_id: Uuid, cols: u32, rows: u32) {
+    pub async fn resize_channel(
+        &self,
+        channel_id: Uuid,
+        cols: u32,
+        rows: u32,
+    ) -> Result<(), SshClientError> {
         self.command(RCCommand::Channel(
             channel_id,
             ChannelOperation::ResizePty(make_pty_request(cols, rows)),
         ))
-        .await;
+        .await?;
         self.with_recorder(channel_id, async move |r| {
             if let Err(e) = r.write_pty_resize(cols, rows).await {
                 error!(%channel_id, ?e, "Failed to record PTY resize");
             }
         })
         .await;
+        Ok(())
     }
 
-    pub async fn close_channel(&self, channel_id: Uuid) {
+    pub async fn close_channel(&self, channel_id: Uuid) -> Result<(), SshClientError> {
         self.command(RCCommand::Channel(channel_id, ChannelOperation::Close))
-            .await;
+            .await?;
+        Ok(())
     }
 }
 

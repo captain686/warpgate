@@ -16,23 +16,21 @@ use warpgate_core::logging::{
 use crate::Cli;
 
 pub async fn init_logging(config: Option<&WarpgateConfig>, cli: &Cli) -> Result<()> {
-    if std::env::var("RUST_LOG").is_err() {
-        #[allow(unsafe_code)]
-        unsafe {
-            match cli.debug {
-                0 => std::env::set_var("RUST_LOG", "audit=info,warpgate=info"),
-                1 => std::env::set_var("RUST_LOG", "audit=info,warpgate=debug"),
-                2 => std::env::set_var("RUST_LOG", "audit=info,warpgate=debug,russh=debug"),
-                _ => std::env::set_var("RUST_LOG", "debug"),
-            }
-        }
-    }
-
     LogTracer::init().context("Failed to initialize log compatibility layer")?;
 
     let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
 
-    let env_filter = Arc::new(EnvFilter::from_default_env());
+    let default_filter = match cli.debug {
+        0 => "audit=info,warpgate=info",
+        1 => "audit=info,warpgate=debug",
+        2 => "audit=info,warpgate=debug,russh=debug",
+        _ => "debug",
+    };
+    let env_filter = Arc::new(
+        EnvFilter::try_from_default_env()
+            .or_else(|_| EnvFilter::try_new(default_filter))
+            .context("Invalid log filter")?,
+    );
     let enable_colors = console::user_attended();
 
     // Determine effective log format (CLI overrides config)

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use poem::Request;
 use poem::session::Session;
 use poem::web::Data;
@@ -5,13 +7,15 @@ use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, OpenApi};
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tokio::time::timeout;
+use tracing::{debug, warn};
 use warpgate_common::WarpgateError;
 use warpgate_common_http::auth::UnauthenticatedRequestContext;
 use warpgate_common_http::ext::construct_external_url;
 use warpgate_sso::{SsoClient, SsoLoginRequest};
 
 pub struct Api;
+const SSO_PROVIDER_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Object)]
 struct StartSsoResponseParams {
@@ -25,6 +29,10 @@ enum StartSsoResponse {
     Ok(Json<StartSsoResponseParams>),
     #[oai(status = 404)]
     NotFound,
+    #[oai(status = 503)]
+    ProviderUnavailable,
+    #[oai(status = 504)]
+    ProviderTimeout,
 }
 
 pub static SSO_CONTEXT_SESSION_KEY: &str = "sso_request";
@@ -73,19 +81,56 @@ impl Api {
         ));
         debug!("Return URL: {return_url}");
 
-        let client = SsoClient::new(provider_config.provider.clone())?;
+        let client = match SsoClient::new(provider_config.provider.clone()) {
+            Ok(client) => client,
+            Err(error) => {
+                warn!(provider=%name, ?error, "Failed to initialize SSO provider");
+                return Ok(StartSsoResponse::ProviderUnavailable);
+            }
+        };
 
-        let sso_req = client.start_login(return_url.to_string()).await?;
+        let sso_req = match timeout(
+            SSO_PROVIDER_TIMEOUT,
+            client.start_login(return_url.to_string()),
+        )
+        .await
+        {
+            Ok(Ok(request)) => request,
+            Ok(Err(error)) => {
+                warn!(provider=%name, ?error, "SSO provider failed to start login");
+                return Ok(StartSsoResponse::ProviderUnavailable);
+            }
+            Err(_) => {
+                warn!(provider=%name, timeout=?SSO_PROVIDER_TIMEOUT, "SSO provider start login timed out");
+                return Ok(StartSsoResponse::ProviderTimeout);
+            }
+        };
         let return_host = ctx.trusted_host_header(req);
 
         let url = sso_req.auth_url().to_string();
+        let supports_single_logout = match timeout(
+            SSO_PROVIDER_TIMEOUT,
+            client.supports_single_logout(),
+        )
+        .await
+        {
+            Ok(Ok(supports_single_logout)) => supports_single_logout,
+            Ok(Err(error)) => {
+                warn!(provider=%name, ?error, "SSO provider capability lookup failed");
+                return Ok(StartSsoResponse::ProviderUnavailable);
+            }
+            Err(_) => {
+                warn!(provider=%name, timeout=?SSO_PROVIDER_TIMEOUT, "SSO provider capability lookup timed out");
+                return Ok(StartSsoResponse::ProviderTimeout);
+            }
+        };
         session.set(
             SSO_CONTEXT_SESSION_KEY,
             SsoContext {
                 provider: name,
                 request: sso_req,
                 next_url: next.0.clone(),
-                supports_single_logout: client.supports_single_logout().await?,
+                supports_single_logout,
                 return_host,
             },
         );

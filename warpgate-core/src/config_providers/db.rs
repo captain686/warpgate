@@ -475,7 +475,7 @@ impl ConfigProvider for DatabaseConfigProvider {
                 let base64_bytes = BASE64.encode(public_key_bytes);
                 let openssh_public_key = format!("{kind} {base64_bytes}");
                 debug!(
-                    username = &user_details.username[..],
+                    username = user_details.username.as_str(),
                     "Client key: {}", openssh_public_key
                 );
                 let mut query = entities::PublicKeyCredential::Entity::find()
@@ -530,7 +530,7 @@ impl ConfigProvider for DatabaseConfigProvider {
                         )
                         .unwrap_or_else(|e| {
                             error!(
-                                username = &user_details.username[..],
+                                username = user_details.username.as_str(),
                                 "Error verifying password hash: {}", e
                             );
                             false

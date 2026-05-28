@@ -90,6 +90,22 @@ fn make_redirect_url(err: &str) -> String {
     )
 }
 
+fn make_continue_login_url(context: &SsoContext) -> String {
+    let mut url = "/@warpgate#/gateway/login".to_string();
+    if let Some(next_url) = context.next_url.as_deref() {
+        url.push_str("?next=");
+        url.push_str(&utf8_percent_encode(next_url, NON_ALPHANUMERIC).to_string());
+    }
+
+    if let Some(ref host) = context.return_host
+        && url.starts_with('/')
+    {
+        url = format!("https://{host}{url}");
+    }
+
+    url
+}
+
 #[OpenApi]
 impl Api {
     #[oai(
@@ -197,6 +213,11 @@ impl Api {
         let Some(context) = session.get::<SsoContext>(SSO_CONTEXT_SESSION_KEY) else {
             return Ok(Err("Not in an active SSO process".to_string()));
         };
+        let continue_login_url = make_continue_login_url(&context);
+        let context_provider = context.provider.clone();
+        let context_next_url = context.next_url.clone();
+        let context_return_host = context.return_host.clone();
+        let context_supports_single_logout = context.supports_single_logout;
 
         let Some(code) = code else {
             return Ok(Err(
@@ -241,12 +262,12 @@ impl Api {
             .sso_providers
             .clone();
         let mut iter = providers_config.iter();
-        let Some(provider_config) = iter.find(|x| x.name == context.provider) else {
-            return Ok(Err(format!("No provider matching {}", context.provider)));
+        let Some(provider_config) = iter.find(|x| x.name == context_provider) else {
+            return Ok(Err(format!("No provider matching {}", context_provider)));
         };
 
         let cred = AuthCredential::Sso {
-            provider: context.provider.clone(),
+            provider: context_provider.clone(),
             email: email.clone(),
         };
 
@@ -264,9 +285,9 @@ impl Api {
             return Ok(Err(format!("No user matching {email}")));
         };
 
-        let mut auth_state_store = services.auth_state_store.lock().await;
         let remote_ip = req.remote_addr().as_socket_addr().map(|a| a.ip());
-        let state_arc =
+        let state_arc = {
+            let mut auth_state_store = services.auth_state_store.lock().await;
             match get_auth_state_for_request(&username, session, &mut auth_state_store, remote_ip)
                 .await
             {
@@ -280,36 +301,59 @@ impl Api {
                     }
                     return Err(e);
                 }
-            };
+            }
+        };
 
-        let mut state = state_arc.lock().await;
-        let mut cp = services.config_provider.lock().await;
-
-        if state.user_info().username != username {
+        if state_arc.lock().await.user_info().username != username {
             return Ok(Err(format!(
                 "Incorrect account for SSO authentication ({username})"
             )));
         }
 
-        if cp.validate_credential(&username, &cred, None).await? {
-            state.add_valid_credential(cred);
+        if services
+            .config_provider
+            .lock()
+            .await
+            .validate_credential(&username, &cred, None)
+            .await?
+        {
+            let (state_id, auth_result) = {
+                let mut state = state_arc.lock().await;
+                state.add_valid_credential(cred);
+                (*state.id(), state.verify())
+            };
+
+            match auth_result.clone() {
+                AuthResult::Accepted { user_info } => {
+                    services
+                        .auth_state_store
+                        .lock()
+                        .await
+                        .complete_with_result(&state_id, auth_result);
+                    authorize_session(req, &ctx, user_info).await?;
+                    session.set_sso_login_state(SsoLoginState {
+                        provider: context_provider,
+                        token: response.id_token.clone(),
+                        supports_single_logout: context_supports_single_logout,
+                    });
+                }
+                AuthResult::Need(_) => {
+                    return Ok(Ok(continue_login_url));
+                }
+                AuthResult::Rejected => {
+                    return Ok(Err(format!(
+                        "Failed to validate SSO credential for {username}"
+                    )));
+                }
+            }
         } else {
             return Ok(Err(format!(
                 "Failed to validate SSO credential for {username}"
             )));
         }
 
-        if let AuthResult::Accepted { user_info } = state.verify() {
-            auth_state_store.complete(state.id()).await;
-            authorize_session(req, &ctx, user_info).await?;
-            session.set_sso_login_state(SsoLoginState {
-                provider: context.provider,
-                token: response.id_token,
-                supports_single_logout: context.supports_single_logout,
-            });
-        }
-
         let mappings = provider_config.provider.role_mappings();
+        let mut cp = services.config_provider.lock().await;
         if let Some(remote_groups) = response.access_roles {
             // If mappings is not set, all groups are subject to sync
             // and names won't be remapped
@@ -382,13 +426,12 @@ impl Api {
                 .await?;
         }
 
-        let mut next_url = context
-            .next_url
+        let mut next_url = context_next_url
             .as_deref()
             .unwrap_or("/@warpgate#/gateway/login")
             .to_owned();
 
-        if let Some(ref host) = context.return_host
+        if let Some(ref host) = context_return_host
             && next_url.starts_with('/')
         {
             next_url = format!("https://{host}{next_url}");

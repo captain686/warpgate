@@ -6,6 +6,7 @@
     import { FormGroup, Input } from '@sveltestrap/sveltestrap'
     import LdapConnectionFields from './LdapConnectionFields.svelte'
     import { defaultLdapPortForTlsMode, testLdapConnection } from './common'
+    import ConfirmModal from 'common/ConfirmModal.svelte'
 
     interface Props {
         params: { id: string }
@@ -35,6 +36,7 @@
     let error = $state<string | null>(null)
     let testResult = $state<{ success: boolean; message: string } | null>(null)
     let isLoaded = $state(false)
+    let deleteServerModalOpen = $state(false)
 
     // Auto-update port based on TLS mode (only after initial load)
     $effect(() => {
@@ -82,6 +84,7 @@
             })
         } catch (e: any) {
             error = await stringifyError(e)
+            throw e
         }
     }
 
@@ -115,11 +118,11 @@
         }
     }
 
-    async function remove() {
-        if (!confirm('Are you sure you want to delete this LDAP server?')) {
-            return
-        }
+    function requestRemove() {
+        deleteServerModalOpen = true
+    }
 
+    async function remove() {
         try {
             await api.deleteLdapServer({ id: params.id })
             push('/config/ldap-servers')
@@ -238,10 +241,18 @@
                 <AsyncButton type="button" class="btn btn-primary" click={save}>
                     Save
                 </AsyncButton>
-                <AsyncButton type="button" class="btn btn-danger" click={remove}>
+                <AsyncButton type="button" class="btn btn-danger" click={requestRemove}>
                     Remove
                 </AsyncButton>
             </div>
         </form>
     </div>
 </Loadable>
+
+<ConfirmModal
+    bind:isOpen={deleteServerModalOpen}
+    title="Delete LDAP server"
+    message={`Delete LDAP server ${name}?`}
+    confirmLabel="Delete"
+    onConfirm={remove}
+/>

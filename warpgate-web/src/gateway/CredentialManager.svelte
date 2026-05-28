@@ -13,6 +13,7 @@
     import Loadable from 'common/Loadable.svelte'
     import { Button } from '@sveltestrap/sveltestrap'
     import Tooltip from 'common/sveltestrap-s5-ports/Tooltip.svelte'
+    import ConfirmModal from 'common/ConfirmModal.svelte'
 
     let creds: CredentialsState | undefined = $state()
 
@@ -20,6 +21,8 @@
     let issuingCertificateCredential = $state(false)
     let creatingOtpCredential = $state(false)
     let changingPassword = $state(false)
+    let revokingCertificateCredential: ExistingCertificateCredential | undefined = $state()
+    let revokeCertificateModalOpen = $state(false)
 
     const initPromise = init()
 
@@ -72,12 +75,20 @@
         return response
     }
 
-    async function deleteCertificate (credential: ExistingCertificateCredential) {
-        if (confirm('Permanently revoke certificate?')) {
-            creds!.certificates = creds!.certificates.filter(c => c.id !== credential.id)
-            await api.revokeMyCertificate(credential)
-            await deleteCertificateKey(credential.id)
+    function requestDeleteCertificate (credential: ExistingCertificateCredential) {
+        revokingCertificateCredential = credential
+        revokeCertificateModalOpen = true
+    }
+
+    async function deleteCertificate () {
+        if (!revokingCertificateCredential) {
+            return
         }
+
+        creds!.certificates = creds!.certificates.filter(c => c.id !== revokingCertificateCredential?.id)
+        await api.revokeMyCertificate(revokingCertificateCredential)
+        await deleteCertificateKey(revokingCertificateCredential.id)
+        revokingCertificateCredential = undefined
     }
 </script>
 
@@ -236,7 +247,7 @@
             color="link"
                 class="ms-2"
                 onclick={e => {
-                    deleteCertificate(credential)
+                    requestDeleteCertificate(credential)
                     e.preventDefault()
                 }}
             >
@@ -271,6 +282,14 @@
     {/if}
 {/if}
 </Loadable>
+
+<ConfirmModal
+    bind:isOpen={revokeCertificateModalOpen}
+    title="Revoke certificate"
+    message="Permanently revoke certificate?"
+    confirmLabel="Revoke"
+    onConfirm={deleteCertificate}
+/>
 
 {#if changingPassword}
 <CreatePasswordModal

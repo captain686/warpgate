@@ -300,11 +300,16 @@ impl DetailApi {
 
         drop(db);
 
+        let session_states = {
+            let state = ctx.services().state.lock().await;
+            state.sessions.values().cloned().collect::<Vec<_>>()
+        };
+
         ctx.services()
             .rate_limiter_registry
             .lock()
             .await
-            .apply_new_rate_limits(&*ctx.services().state.lock().await)
+            .apply_new_rate_limits(&session_states)
             .await?;
 
         Ok(UpdateUserResponse::Ok(Json(user.try_into()?)))

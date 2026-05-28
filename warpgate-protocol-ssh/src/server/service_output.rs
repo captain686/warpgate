@@ -2,7 +2,7 @@ use std::io::Write as _;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use termcolor::{Buffer, Color, ColorSpec, WriteColor as _};
 use tokio::sync::{broadcast, mpsc};
 
@@ -47,7 +47,10 @@ impl ServiceOutput {
                                 #[allow(clippy::indexing_slicing)]
                                 let tick = ticks[tick_index];
                                 let badge = ansi_paint(Color::Black, Color::Blue, &format!(" {tick} Warpgate connecting "));
-                                let _ = output_tx.send(Bytes::from([ERASE_PROGRESS_SPINNER_BUF, badge.as_bytes()].concat()));
+                                let mut output = BytesMut::with_capacity(ERASE_PROGRESS_SPINNER_BUF.len() + badge.len());
+                                output.extend_from_slice(ERASE_PROGRESS_SPINNER_BUF);
+                                output.extend_from_slice(badge.as_bytes());
+                                let _ = output_tx.send(output.freeze());
                             }
                         }
                     }

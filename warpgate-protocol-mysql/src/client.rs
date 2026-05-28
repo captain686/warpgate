@@ -128,27 +128,26 @@ impl MySqlClient {
         };
 
         if handshake.auth_plugin == Some(AuthPlugin::MySqlNativePassword) {
-            let scramble_bytes = [
-                &handshake.auth_plugin_data.first_ref()[..],
-                &handshake.auth_plugin_data.last_ref()[..],
-            ]
-            .concat();
-            match scramble_bytes.try_into() as Result<[u8; 20], Vec<u8>> {
-                Err(scramble_bytes) => {
-                    warn!("Invalid scramble length ({})", scramble_bytes.len());
-                }
-                Ok(scramble) => {
-                    response.auth_plugin = Some(AuthPlugin::MySqlNativePassword);
-                    response.auth_response = Some(
-                        BytesMut::from(
-                            compute_auth_challenge_response(scramble, &effective_password)
-                                .map_err(MySqlError::other)?
-                                .as_bytes(),
-                        )
-                        .freeze(),
-                    );
-                    trace!(response=?response.auth_response, ?scramble, "auth");
-                }
+            let scramble_first = handshake.auth_plugin_data.first_ref().as_ref();
+            let scramble_last = handshake.auth_plugin_data.last_ref().as_ref();
+            let scramble_len = scramble_first.len() + scramble_last.len();
+            if scramble_len != 20 {
+                warn!("Invalid scramble length ({scramble_len})");
+            } else {
+                let mut scramble = [0_u8; 20];
+                let split_at = scramble_first.len();
+                scramble[..split_at].copy_from_slice(scramble_first);
+                scramble[split_at..].copy_from_slice(scramble_last);
+                response.auth_plugin = Some(AuthPlugin::MySqlNativePassword);
+                response.auth_response = Some(
+                    BytesMut::from(
+                        compute_auth_challenge_response(scramble, &effective_password)
+                            .map_err(MySqlError::other)?
+                            .as_bytes(),
+                    )
+                    .freeze(),
+                );
+                trace!(response=?response.auth_response, ?scramble, "auth");
             }
         }
 

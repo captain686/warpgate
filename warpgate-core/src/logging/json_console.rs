@@ -56,9 +56,11 @@ where
 
         // Extract message before moving values
         let message = values.remove("message").unwrap_or_default();
-        #[allow(clippy::unwrap_used, reason = "never fails")]
+        let timestamp = OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .unwrap_or_else(|_| OffsetDateTime::now_utc().unix_timestamp().to_string());
         let entry = JsonLogEntry {
-            timestamp: OffsetDateTime::now_utc().format(&Rfc3339).unwrap(),
+            timestamp,
             level: level_to_str(*event.metadata().level()),
             target: event.metadata().target().to_string(),
             message,

@@ -104,6 +104,7 @@ pub enum RCEvent {
 }
 
 pub type RCCommandReply = oneshot::Sender<Result<(), SshClientError>>;
+const REMOTE_CLIENT_EVENT_QUEUE_CAPACITY: usize = 1024;
 
 #[derive(Clone, Debug)]
 pub enum RCCommand {
@@ -140,25 +141,25 @@ pub struct RemoteClient {
     pending_streamlocal_forwards: Vec<String>,
     state: RCState,
     abort_rx: UnboundedReceiver<()>,
-    inner_event_rx: UnboundedReceiver<InnerEvent>,
-    inner_event_tx: UnboundedSender<InnerEvent>,
+    inner_event_rx: Receiver<InnerEvent>,
+    inner_event_tx: Sender<InnerEvent>,
     child_tasks: Vec<JoinHandle<Result<(), SshClientError>>>,
     services: Services,
 }
 
 pub struct RemoteClientHandles {
     pub event_rx: Receiver<RCEvent>,
-    pub command_tx: UnboundedSender<(RCCommand, Option<RCCommandReply>)>,
+    pub command_tx: Sender<(RCCommand, Option<RCCommandReply>)>,
     pub abort_tx: UnboundedSender<()>,
 }
 
 impl RemoteClient {
     pub fn create(id: SessionId, services: Services) -> io::Result<RemoteClientHandles> {
         let (event_tx, event_rx) = channel(1024);
-        let (command_tx, mut command_rx) = unbounded_channel();
+        let (command_tx, mut command_rx) = channel(REMOTE_CLIENT_EVENT_QUEUE_CAPACITY);
         let (abort_tx, abort_rx) = unbounded_channel();
 
-        let (inner_event_tx, inner_event_rx) = unbounded_channel();
+        let (inner_event_tx, inner_event_rx) = channel(REMOTE_CLIENT_EVENT_QUEUE_CAPACITY);
 
         let this = Self {
             id,
@@ -180,7 +181,9 @@ impl RemoteClient {
             {
                 async move {
                     while let Some((e, response)) = command_rx.recv().await {
-                        inner_event_tx.send(InnerEvent::RCCommand(e, response))?;
+                        inner_event_tx
+                            .send(InnerEvent::RCCommand(e, response))
+                            .await?;
                     }
                     Ok::<(), anyhow::Error>(())
                 }
@@ -319,6 +322,7 @@ impl RemoteClient {
                 match client_event {
                     ClientHandlerEvent::Disconnect => {
                         self._on_disconnect().await;
+                        return Ok(true);
                     }
                     ClientHandlerEvent::ForwardedTcpIp(channel, params) => {
                         info!("New forwarded connection: {params:?}");
@@ -446,7 +450,11 @@ impl RemoteClient {
             }
         };
 
-        info!(?address, username = &ssh_options.username[..], "Connecting");
+        info!(
+            ?address,
+            username = ssh_options.username.as_str(),
+            "Connecting"
+        );
         let algos = if ssh_options.allow_insecure_algos.unwrap_or(false) {
             Preferred {
                 kex: Cow::Borrowed(&[
@@ -517,7 +525,7 @@ impl RemoteClient {
 
         let config = Arc::new(config);
 
-        let (event_tx, mut event_rx) = unbounded_channel();
+        let (event_tx, mut event_rx) = channel(REMOTE_CLIENT_EVENT_QUEUE_CAPACITY);
         let handler = ClientHandler {
             ssh_options: ssh_options.clone(),
             event_tx,
@@ -560,29 +568,43 @@ impl RemoteClient {
                         }
                     };
 
+                    macro_rules! abortable {
+                        ($future:expr) => {
+                            tokio::select! {
+                                result = $future => result,
+                                Some(()) = self.abort_rx.recv() => {
+                                    info!("Abort requested");
+                                    self.set_disconnected().await;
+                                    return Err(ConnectionError::Aborted);
+                                }
+                            }
+                        };
+                    }
+
                     let mut auth_result = false;
                     let mut auth_error_msg: Option<String> = None;
                     match ssh_options.auth {
                         SSHTargetAuth::Password(auth) => {
-                            let response = session
+                            let response = abortable!(session
                                     .authenticate_password(
                                         ssh_options.username.clone(),
                                         auth.password.expose_secret()
                                     )
-                                    .await?;
-                            auth_result = self._handle_auth_result(
+                                )?;
+                            auth_result = abortable!(Self::_handle_auth_result(
                                 &mut session,
                                 ssh_options.username.clone(),
                                 response
-                            ).await.unwrap_or(false);
+                            )).unwrap_or(false);
                             if auth_result {
-                                debug!(username=&ssh_options.username[..], "Authenticated with password");
+                                debug!(username=ssh_options.username.as_str(), "Authenticated with password");
                             } else {
                                 auth_error_msg = Some("Password authentication was rejected by the SSH target".to_string());
                             }
                         }
                         SSHTargetAuth::PublicKey(_) => {
-                            let best_hash = session.best_supported_rsa_hash().await?.flatten();
+                            let best_hash =
+                                abortable!(session.best_supported_rsa_hash())?.flatten();
                             #[allow(clippy::explicit_auto_deref)]
                             let keys = load_keys(
                                 &*self.services.config.lock().await,
@@ -597,45 +619,45 @@ impl RemoteClient {
                                     continue;
                                 }
                                 let key_str = key.public_key().to_openssh().map_err(russh::Error::from)?;
-                                let mut response  = session
+                                let mut response  = abortable!(session
                                     .authenticate_publickey(
                                         ssh_options.username.clone(),
                                         PrivateKeyWithHashAlg::new(key.clone(), best_hash),
-                                    )
-                                    .await?;
+                                    ))?;
 
-                                auth_result = self._handle_auth_result(
+                                auth_result = abortable!(Self::_handle_auth_result(
                                     &mut session,
                                     ssh_options.username.clone(),
                                     response
-                                ).await.unwrap_or(false);
+                                )).unwrap_or(false);
 
                                 if !auth_result && key.key_data().is_rsa() && best_hash.is_some() && allow_insecure_algos {
                                     // Corner case: OpenSSH advertising rsa2-sha-* through server-sig-algs, but it being
                                     // disabled via PubkeyAcceptedAlgorithms. So far the only case is our own test suite.
                                     // In this case we retry with ssh-rsa (SHA1)
-                                    response = session
+                                    response = abortable!(session
                                         .authenticate_publickey(
                                             ssh_options.username.clone(),
                                             PrivateKeyWithHashAlg::new(key.clone(), None),
-                                        ).await?;
+                                        ))?;
 
-                                    auth_result = self._handle_auth_result(
+                                    auth_result = abortable!(Self::_handle_auth_result(
                                         &mut session,
                                         ssh_options.username.clone(),
                                         response
-                                    ).await.unwrap_or(false);
+                                    )).unwrap_or(false);
                                 }
 
                                 if auth_result {
-                                    debug!(username=&ssh_options.username[..], key=%key_str, "Authenticated with key");
+                                    debug!(username=ssh_options.username.as_str(), key=%key_str, "Authenticated with key");
                                     break;
                                 }
                                 auth_error_msg = Some("Public key authentication was rejected by the SSH target".into());
                             }
                         }
                         SSHTargetAuth::IamRole(_) => {
-                            let instance_info = warpgate_aws::find_instance_by_ip(&ssh_options.host).await?;
+                            let instance_info =
+                                abortable!(warpgate_aws::find_instance_by_ip(&ssh_options.host))?;
 
                             let key = load_preferred_key(
                                 &*self.services.config.lock().await,
@@ -646,32 +668,33 @@ impl RemoteClient {
                             let pub_key_str = key.public_key().to_openssh().map_err(russh::Error::from)?;
 
                             // Push the public key via EC2 Instance Connect
-                            warpgate_aws::send_ssh_public_key(
+                            abortable!(warpgate_aws::send_ssh_public_key(
                                 &instance_info.instance_id,
                                 &instance_info.availability_zone,
                                 &instance_info.region,
                                 &ssh_options.username,
                                 &pub_key_str,
-                            ).await?;
+                            ))?;
 
                             // Now authenticate with this key (key is valid for 60 seconds)
                             let key = Arc::new(key.clone());
-                            let best_hash = session.best_supported_rsa_hash().await?.flatten();
-                            let response = session
+                            let best_hash =
+                                abortable!(session.best_supported_rsa_hash())?.flatten();
+                            let response = abortable!(session
                                 .authenticate_publickey(
                                     ssh_options.username.clone(),
                                     PrivateKeyWithHashAlg::new(key.clone(), best_hash),
                                 )
-                                .await?;
+                            )?;
 
-                            auth_result = self._handle_auth_result(
+                            auth_result = abortable!(Self::_handle_auth_result(
                                 &mut session,
                                 ssh_options.username.clone(),
                                 response
-                            ).await.unwrap_or(false);
+                            )).unwrap_or(false);
 
                             if auth_result {
-                                debug!(username=&ssh_options.username[..], "Authenticated via EC2 Instance Connect");
+                                debug!(username=ssh_options.username.as_str(), "Authenticated via EC2 Instance Connect");
                             }
 
                             if !auth_result {
@@ -698,7 +721,9 @@ impl RemoteClient {
                         async move {
                             while let Some(e) = event_rx.recv().await {
                                 info!("{:?}", e);
-                                inner_event_tx.send(InnerEvent::ClientHandlerEvent(e))?;
+                                inner_event_tx
+                                    .send(InnerEvent::ClientHandlerEvent(e))
+                                    .await?;
                             }
                             Ok::<(), anyhow::Error>(())
                         }
@@ -722,7 +747,6 @@ impl RemoteClient {
     /// * `username`: username of the authenticating user
     /// * `result`: the initial result received via the configured auth method
     async fn _handle_auth_result(
-        &self,
         session: &mut Handle<ClientHandler>,
         username: String,
         result: AuthResult,
@@ -918,6 +942,8 @@ impl RemoteClient {
                 .await
                 .disconnect(russh::Disconnect::ByApplication, "", "")
                 .await;
+        }
+        if self.state != RCState::Disconnected {
             self.set_disconnected().await;
         }
     }

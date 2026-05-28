@@ -146,7 +146,7 @@ pub async fn connect_to_db(
     config: &WarpgateConfig,
     params: &GlobalParams,
 ) -> Result<DatabaseConnection> {
-    let mut url = url::Url::parse(&config.store.database_url.expose_secret()[..])?;
+    let mut url = url::Url::parse(config.store.database_url.expose_secret())?;
     if url.scheme() == "sqlite" {
         let path = url.path();
         let mut abs_path = params.paths_relative_to().clone();
@@ -307,12 +307,6 @@ pub async fn cleanup_db(
 
 #[cfg(test)]
 mod tests {
-    use sea_orm::ActiveValue::Set;
-    use sea_orm::{ActiveModelTrait, ConnectionTrait, Database, EntityTrait, Schema};
-    use serde_json::json;
-    use uuid::Uuid;
-    use warpgate_db_entities::LogEntry;
-
     use super::*;
 
     #[test]
@@ -356,8 +350,17 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "sqlite")]
     #[tokio::test]
     async fn trims_oldest_non_audit_logs_when_size_limit_exceeded() -> Result<()> {
+        use sea_orm::ActiveValue::Set;
+        use sea_orm::{
+            ActiveModelTrait, ConnectionTrait, Database, EntityTrait, QueryOrder, Schema,
+        };
+        use serde_json::json;
+        use uuid::Uuid;
+        use warpgate_db_entities::LogEntry;
+
         let db = Database::connect("sqlite::memory:").await?;
         let builder = db.get_database_backend();
         let schema = Schema::new(builder);

@@ -16,7 +16,6 @@ pub trait SessionHandle {
     fn close(&mut self);
 }
 
-#[derive(Clone)]
 pub struct WarpgateServerHandle {
     id: SessionId,
     db: Arc<Mutex<DatabaseConnection>>,
@@ -131,21 +130,35 @@ impl WarpgateServerHandle {
         S: AsyncRead + AsyncWrite + Unpin + Send,
     {
         let (stream, handle) = stack_rate_limiters(stream);
+        let mut registry = self.rate_limiters_registry.lock().await;
         let mut ss = self.session_state.lock().await;
-        self.rate_limiters_registry
-            .lock()
-            .await
-            .update_rate_limiters(&ss, &handle)
-            .await?;
+        registry.update_rate_limiters(&ss, &handle).await?;
         ss.rate_limiter_handles.push(handle);
         Ok(stream)
     }
 
     async fn update_rate_limiters(&self) -> Result<(), WarpgateError> {
-        let mut state = self.session_state.lock().await;
         let mut registry = self.rate_limiters_registry.lock().await;
+        let mut state = self.session_state.lock().await;
         registry.update_all_rate_limiters(&mut state).await?;
         Ok(())
+    }
+
+    pub async fn end_session(&self) {
+        let username = self
+            .session_state
+            .lock()
+            .await
+            .user_info
+            .as_ref()
+            .map_or_else(String::new, |x| x.username.clone());
+        let span = info_span!("Session", session=%self.id, session_username=%username);
+        self.state
+            .lock()
+            .await
+            .remove_session(self.id)
+            .instrument(span)
+            .await;
     }
 }
 

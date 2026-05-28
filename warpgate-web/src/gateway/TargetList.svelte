@@ -27,12 +27,15 @@ import { Button, Dropdown, DropdownItem, DropdownMenu, DropdownToggle, Modal, Mo
 import { serverInfo } from './lib/store'
 import { getContext } from 'svelte'
 import { firstBy } from 'thenby'
+import AsyncButton from 'common/AsyncButton.svelte'
 import GettingStarted from 'common/GettingStarted.svelte'
 import EmptyState from 'common/EmptyState.svelte'
 import GroupColorCircle from 'common/GroupColorCircle.svelte'
 import IssuedPublicKeyModal from 'admin/IssuedPublicKeyModal.svelte'
 import CreateOtpModal from 'admin/CreateOtpModal.svelte'
 import Alert from 'common/sveltestrap-s5-ports/Alert.svelte'
+import ModalHeader from 'common/sveltestrap-s5-ports/ModalHeader.svelte'
+import ConfirmModal from 'common/ConfirmModal.svelte'
 
 let instructionsTarget: TargetSnapshot|undefined = $state()
 let credentialState: SelfServiceCredentialsState | undefined = $state()
@@ -43,6 +46,11 @@ let issuingKeyTarget: TargetSnapshot | undefined = $state()
 let issuingKeyModalOpen = $state(false)
 let creatingOtpTarget: TargetSnapshot | undefined = $state()
 let creatingOtpModalOpen = $state(false)
+let revokingIssuedKeyTarget: TargetSnapshot | undefined = $state()
+let revokingIssuedKeyModalOpen = $state(false)
+let selectedIssuedPublicKeyId = $state('')
+let removingOtpTarget: TargetSnapshot | undefined = $state()
+let removeOtpModalOpen = $state(false)
 const getRoutePrefix = getContext<() => string>('warpgate.gatewayRoutePrefix') ?? (() => '')
 const isEmbedded = getContext<() => boolean>('warpgate.gatewayEmbedded') ?? (() => false)
 
@@ -57,6 +65,17 @@ $effect(() => {
         creatingOtpTarget = undefined
     }
 })
+
+function closeRevokeIssuedKeyModal () {
+    revokingIssuedKeyModalOpen = false
+    revokingIssuedKeyTarget = undefined
+    selectedIssuedPublicKeyId = ''
+}
+
+function closeRemoveOtpModal () {
+    removeOtpModalOpen = false
+    removingOtpTarget = undefined
+}
 
 async function openWebSsh (target: TargetSnapshot) {
     const terminalWindow = window.open('', '_blank')
@@ -106,12 +125,20 @@ async function loadCredentialState (force = false): Promise<SelfServiceCredentia
     }
 }
 
-function issuedPublicKeyForTarget (target: TargetSnapshot): SelfServicePublicKeyCredential | undefined {
-    return credentialState?.publicKeys.find(credential =>
-        credential.targetId === target.id
-        && credential.issuedByWarpgate
-        && !credential.revokedAt
-    )
+function issuedPublicKeysForTarget (target: TargetSnapshot): SelfServicePublicKeyCredential[] {
+    return (credentialState?.publicKeys ?? [])
+        .filter(credential =>
+            credential.targetId === target.id
+            && credential.issuedByWarpgate
+            && !credential.revokedAt
+        )
+        .sort((a, b) => {
+            const dateComparison = (b.dateAdded?.getTime() ?? 0) - (a.dateAdded?.getTime() ?? 0)
+            if (dateComparison !== 0) {
+                return dateComparison
+            }
+            return a.label.localeCompare(b.label)
+        })
 }
 
 function otpForTarget (target: TargetSnapshot): SelfServiceOtpCredential | undefined {
@@ -149,22 +176,59 @@ async function issueKeyForTarget (args: IssueMyPublicKeyArgs): Promise<IssueMyPu
     return response
 }
 
-async function revokeIssuedKeyForTarget (target: TargetSnapshot) {
+async function showRevokeIssuedKeyModal (target: TargetSnapshot) {
     credentialActionError = undefined
     try {
-        await loadCredentialState()
-        const credential = issuedPublicKeyForTarget(target)
-        if (!credential) {
+        await loadCredentialState(true)
+        const credentials = issuedPublicKeysForTarget(target)
+        const firstCredential = credentials[0]
+        if (!firstCredential) {
             credentialActionError = `No issued SSH key found for ${target.name}`
             return
         }
-        if (!confirm(`Revoke the issued SSH key for ${target.name}?`)) {
-            return
-        }
+        revokingIssuedKeyTarget = target
+        selectedIssuedPublicKeyId = firstCredential.id
+        revokingIssuedKeyModalOpen = true
+    } catch (error) {
+        credentialActionError = await formatError(error, 'Failed to load issued SSH keys')
+    }
+}
+
+function selectedIssuedPublicKeyForRevocation (): SelfServicePublicKeyCredential | undefined {
+    if (!revokingIssuedKeyTarget) {
+        return undefined
+    }
+    return issuedPublicKeysForTarget(revokingIssuedKeyTarget)
+        .find(credential => credential.id === selectedIssuedPublicKeyId)
+}
+
+async function revokeSelectedIssuedKey () {
+    credentialActionError = undefined
+    const credential = selectedIssuedPublicKeyForRevocation()
+    if (!credential) {
+        credentialActionError = 'Select an issued SSH key to revoke'
+        return
+    }
+
+    try {
         await revokeMyPublicKeyCredential(credential.id)
-        await loadCredentialState(true)
+        if (credentialState) {
+            const revokedAt = new Date()
+            credentialState.publicKeys = credentialState.publicKeys.map(existing => {
+                if (existing.id !== credential.id) {
+                    return existing
+                }
+                return {
+                    ...existing,
+                    revokedAt,
+                    usesLeft: 0,
+                }
+            })
+        }
+        closeRevokeIssuedKeyModal()
     } catch (error) {
         credentialActionError = await formatError(error, 'Failed to revoke SSH key')
+        throw error
     }
 }
 
@@ -202,16 +266,38 @@ async function deleteOtpForTarget (target: TargetSnapshot) {
             credentialActionError = `No target-scoped OTP credential found for ${target.name}`
             return
         }
-        if (!confirm(`Remove the OTP credential for ${target.name}?`)) {
-            return
-        }
         await deleteMyOtpCredential(credential.id)
         if (credentialState) {
             credentialState.otp = credentialState.otp.filter(c => c.id !== credential.id)
         }
+        closeRemoveOtpModal()
     } catch (error) {
         credentialActionError = await formatError(error, 'Failed to remove OTP credential')
+        throw error
     }
+}
+
+async function showRemoveOtpModal (target: TargetSnapshot) {
+    credentialActionError = undefined
+    try {
+        await loadCredentialState()
+        const credential = otpForTarget(target)
+        if (!credential) {
+            credentialActionError = `No target-scoped OTP credential found for ${target.name}`
+            return
+        }
+        removingOtpTarget = target
+        removeOtpModalOpen = true
+    } catch (error) {
+        credentialActionError = await formatError(error, 'Failed to load credentials')
+    }
+}
+
+async function deleteSelectedOtpCredential () {
+    if (!removingOtpTarget) {
+        return
+    }
+    await deleteOtpForTarget(removingOtpTarget)
 }
 
 function loadTargets(
@@ -290,6 +376,29 @@ function groupInfoFromTarget (target: TargetSnapshot): GroupInfo {
         name: target.group.name,
         color: target.group.color ?? BootstrapThemeColor.Secondary,
     }
+}
+
+function abbreviatePublicKey (opensshPublicKey: string): string {
+    const normalized = opensshPublicKey.trim()
+    if (normalized.length <= 96) {
+        return normalized
+    }
+    return `${normalized.slice(0, 64)}...${normalized.slice(-24)}`
+}
+
+function keySummary (credential: SelfServicePublicKeyCredential): string {
+    return credential.abbreviated || abbreviatePublicKey(credential.opensshPublicKey)
+}
+
+function formatDate (date: Date | undefined, fallback: string): string {
+    return date ? date.toLocaleString() : fallback
+}
+
+function formatUses (credential: SelfServicePublicKeyCredential): string {
+    if (credential.maxUses === undefined) {
+        return 'Unlimited'
+    }
+    return `${credential.usesLeft ?? 0} / ${credential.maxUses}`
 }
 
 </script>
@@ -393,11 +502,11 @@ function groupInfoFromTarget (target: TargetSnapshot): GroupInfo {
                                 Issue SSH key
                             </DropdownItem>
                             <DropdownItem
-                                disabled={credentialStateLoading || !issuedPublicKeyForTarget(target)}
+                                disabled={credentialStateLoading || issuedPublicKeysForTarget(target).length === 0}
                                 onclick={e => {
                                     e.preventDefault()
                                     e.stopPropagation()
-                                    void revokeIssuedKeyForTarget(target)
+                                    void showRevokeIssuedKeyModal(target)
                                 }}
                             >
                                 Revoke issued SSH key
@@ -417,7 +526,7 @@ function groupInfoFromTarget (target: TargetSnapshot): GroupInfo {
                                 onclick={e => {
                                     e.preventDefault()
                                     e.stopPropagation()
-                                    void deleteOtpForTarget(target)
+                                    void showRemoveOtpModal(target)
                                 }}
                             >
                                 Remove OTP
@@ -478,6 +587,93 @@ function groupInfoFromTarget (target: TargetSnapshot): GroupInfo {
         </Button>
     </ModalFooter>
 </Modal>
+
+<Modal isOpen={revokingIssuedKeyModalOpen} toggle={closeRevokeIssuedKeyModal} size="lg">
+    <ModalHeader toggle={closeRevokeIssuedKeyModal}>
+        Revoke issued SSH key
+    </ModalHeader>
+    <ModalBody>
+        {#if revokingIssuedKeyTarget}
+            {@const issuedKeys = issuedPublicKeysForTarget(revokingIssuedKeyTarget)}
+            <div class="revoke-key-summary">
+                <div class="summary-label">Target</div>
+                <div class="summary-value">{revokingIssuedKeyTarget.name}</div>
+            </div>
+
+            {#if issuedKeys.length === 0}
+                <p class="text-muted mb-0">No active issued SSH keys are available for this target.</p>
+            {:else}
+                <div class="issued-key-list" role="radiogroup" aria-label="Issued SSH keys">
+                    {#each issuedKeys as credential (credential.id)}
+                        <label
+                            class="issued-key-option"
+                            class:issued-key-option-selected={selectedIssuedPublicKeyId === credential.id}
+                        >
+                            <input
+                                class="form-check-input issued-key-radio"
+                                type="radio"
+                                bind:group={selectedIssuedPublicKeyId}
+                                value={credential.id}
+                            />
+                            <span class="issued-key-content">
+                                <span class="issued-key-heading">
+                                    <span class="issued-key-label">{credential.label || 'Issued SSH key'}</span>
+                                    <span class="badge text-bg-info">Issued</span>
+                                </span>
+                                <code class="issued-key-public-key" title={credential.opensshPublicKey}>
+                                    {keySummary(credential)}
+                                </code>
+                                <span class="issued-key-meta-grid">
+                                    <span class="issued-key-meta">
+                                        <span class="meta-label">Added</span>
+                                        <span>{formatDate(credential.dateAdded, 'Unknown')}</span>
+                                    </span>
+                                    <span class="issued-key-meta">
+                                        <span class="meta-label">Last used</span>
+                                        <span>{formatDate(credential.lastUsed, 'Never')}</span>
+                                    </span>
+                                    <span class="issued-key-meta">
+                                        <span class="meta-label">Expires</span>
+                                        <span>{formatDate(credential.expiresAt, 'Never')}</span>
+                                    </span>
+                                    <span class="issued-key-meta">
+                                        <span class="meta-label">Uses</span>
+                                        <span>{formatUses(credential)}</span>
+                                    </span>
+                                </span>
+                            </span>
+                        </label>
+                    {/each}
+                </div>
+            {/if}
+        {/if}
+    </ModalBody>
+    <ModalFooter>
+        <AsyncButton
+            color="danger"
+            class="modal-button"
+            click={revokeSelectedIssuedKey}
+            disabled={!selectedIssuedPublicKeyForRevocation()}
+        >
+            Revoke selected key
+        </AsyncButton>
+        <Button
+            color="secondary"
+            class="modal-button"
+            onclick={closeRevokeIssuedKeyModal}
+        >
+            Cancel
+        </Button>
+    </ModalFooter>
+</Modal>
+
+<ConfirmModal
+    bind:isOpen={removeOtpModalOpen}
+    title="Remove OTP"
+    message={`Remove the OTP credential for ${removingOtpTarget?.name ?? ''}?`}
+    confirmLabel="Remove"
+    onConfirm={deleteSelectedOtpCredential}
+/>
 
 {#if issuingKeyTarget}
     <IssuedPublicKeyModal
@@ -552,6 +748,111 @@ function groupInfoFromTarget (target: TargetSnapshot): GroupInfo {
         padding: 0;
     }
 
+    .revoke-key-summary {
+        display: grid;
+        grid-template-columns: 6rem 1fr;
+        gap: .25rem 1rem;
+        padding: .75rem 1rem;
+        margin-bottom: 1rem;
+        border: 1px solid var(--bs-border-color);
+        border-radius: .5rem;
+        background: var(--bs-tertiary-bg);
+    }
+
+    .summary-label,
+    .meta-label {
+        color: var(--bs-secondary-color);
+        font-size: .75rem;
+        font-weight: 600;
+        letter-spacing: .02rem;
+        text-transform: uppercase;
+    }
+
+    .summary-value {
+        min-width: 0;
+        overflow: hidden;
+        font-weight: 600;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .issued-key-list {
+        display: grid;
+        gap: .75rem;
+    }
+
+    .issued-key-option {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: .75rem;
+        padding: 1rem;
+        border: 1px solid var(--bs-border-color);
+        border-radius: .5rem;
+        background: var(--bs-body-bg);
+        cursor: pointer;
+        transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease;
+    }
+
+    .issued-key-option:hover {
+        border-color: var(--bs-primary);
+        background: var(--bs-tertiary-bg);
+    }
+
+    .issued-key-option-selected {
+        border-color: var(--bs-primary);
+        box-shadow: 0 0 0 .15rem color-mix(in srgb, var(--bs-primary) 18%, transparent);
+    }
+
+    .issued-key-radio {
+        margin-top: .25rem;
+    }
+
+    .issued-key-content {
+        display: grid;
+        min-width: 0;
+        gap: .5rem;
+    }
+
+    .issued-key-heading {
+        display: flex;
+        align-items: center;
+        gap: .5rem;
+        min-width: 0;
+    }
+
+    .issued-key-label {
+        min-width: 0;
+        overflow: hidden;
+        font-weight: 600;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .issued-key-public-key {
+        display: block;
+        overflow: hidden;
+        padding: .4rem .5rem;
+        border-radius: .375rem;
+        background: var(--bs-secondary-bg);
+        color: var(--bs-body-color);
+        font-size: .8125rem;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .issued-key-meta-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: .75rem 1rem;
+    }
+
+    .issued-key-meta {
+        display: grid;
+        min-width: 0;
+        gap: .125rem;
+        font-size: .875rem;
+    }
+
     @media (max-width: 576px) {
         .target-item {
             align-items: flex-start;
@@ -562,6 +863,11 @@ function groupInfoFromTarget (target: TargetSnapshot): GroupInfo {
             flex-basis: auto;
             margin-left: 0 !important;
             text-align: left;
+        }
+
+        .revoke-key-summary,
+        .issued-key-meta-grid {
+            grid-template-columns: 1fr;
         }
     }
 </style>

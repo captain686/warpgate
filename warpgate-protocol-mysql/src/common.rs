@@ -11,8 +11,10 @@ pub fn compute_auth_challenge_response(
         &{
             let password_sha: [u8; 20] = sha1::Sha1::digest(password).into();
             let password_sha_sha: [u8; 20] = sha1::Sha1::digest(password_sha).into();
-            let password_seed_2sha_sha: [u8; 20] =
-                sha1::Sha1::digest([challenge, password_sha_sha].concat()).into();
+            let mut password_seed_hasher = sha1::Sha1::new();
+            password_seed_hasher.update(challenge);
+            password_seed_hasher.update(password_sha_sha);
+            let password_seed_2sha_sha: [u8; 20] = password_seed_hasher.finalize().into();
 
             let mut result = password_sha;
             result

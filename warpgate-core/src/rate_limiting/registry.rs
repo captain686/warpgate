@@ -10,7 +10,7 @@ use warpgate_db_entities::{Parameters, Target, User};
 
 use super::shared_limiter::SharedWarpgateRateLimiter;
 use super::{RateLimiterStackHandle, WarpgateRateLimiter};
-use crate::{SessionState, State};
+use crate::SessionState;
 
 pub struct RateLimiterRegistry {
     db: Arc<Mutex<DatabaseConnection>>,
@@ -64,8 +64,10 @@ impl RateLimiterRegistry {
             let rate_limiter = WarpgateRateLimiter::new(quota)?;
             self.user_rate_limiters.insert(*user_id, rate_limiter);
         }
-        #[allow(clippy::unwrap_used, reason = "just inserted")]
-        Ok(self.user_rate_limiters.get(user_id).unwrap().clone())
+        self.user_rate_limiters
+            .get(user_id)
+            .cloned()
+            .ok_or_else(|| WarpgateError::InconsistentState("user rate limiter missing".into()))
     }
 
     async fn quota_for_user(&self, user_id: &Uuid) -> Result<Option<u32>, WarpgateError> {
@@ -85,8 +87,10 @@ impl RateLimiterRegistry {
             let rate_limiter = WarpgateRateLimiter::new(quota)?;
             self.target_rate_limiters.insert(*target_id, rate_limiter);
         }
-        #[allow(clippy::unwrap_used, reason = "just inserted")]
-        Ok(self.target_rate_limiters.get(target_id).unwrap().clone())
+        self.target_rate_limiters
+            .get(target_id)
+            .cloned()
+            .ok_or_else(|| WarpgateError::InconsistentState("target rate limiter missing".into()))
     }
 
     async fn quota_for_target(&self, target_id: &Uuid) -> Result<Option<u32>, WarpgateError> {
@@ -148,12 +152,15 @@ impl RateLimiterRegistry {
     }
 
     /// Force refresh all rate limiters in all sessions
-    pub async fn apply_new_rate_limits(&mut self, state: &State) -> Result<(), WarpgateError> {
+    pub async fn apply_new_rate_limits(
+        &mut self,
+        session_states: &[Arc<Mutex<SessionState>>],
+    ) -> Result<(), WarpgateError> {
         // Refresh the global rate limiter
         self.refresh().await?;
 
         // Update all session rate limiters
-        for session_state in state.sessions.values() {
+        for session_state in session_states {
             let mut session_state = session_state.lock().await;
             self.update_all_rate_limiters(&mut session_state).await?;
         }

@@ -65,7 +65,7 @@ impl From<TerminalRecordingItem> for AsciiCast {
                     TerminalRecordingStreamId::Output => "o".to_string(),
                     TerminalRecordingStreamId::Error => "e".to_string(),
                 },
-                String::from_utf8_lossy(&data[..]).to_string(),
+                String::from_utf8_lossy(data.as_ref()).to_string(),
             ),
             TerminalRecordingItem::PtyResize { time, cols, rows } => Self::Header {
                 time,
@@ -91,7 +91,9 @@ impl TerminalRecorder {
     async fn write_item(&self, item: &TerminalRecordingItem, flush: bool) -> Result<()> {
         let mut serialized_item = serde_json::to_vec(&item).map_err(Error::Serialization)?;
         serialized_item.push(b'\n');
-        self.writer.write(&serialized_item).await?;
+        self.writer
+            .write_bytes(Bytes::from(serialized_item))
+            .await?;
         if flush {
             self.writer.flush().await?;
         }
@@ -103,7 +105,7 @@ impl TerminalRecorder {
             &TerminalRecordingItem::Data {
                 time: self.get_time(),
                 stream,
-                data: Bytes::from(data.to_vec()),
+                data: Bytes::copy_from_slice(data),
             },
             false,
         )

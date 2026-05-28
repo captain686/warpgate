@@ -7,6 +7,8 @@ use crate::io::{Decode, Encode};
 use crate::mysql::protocol::Capabilities;
 use crate::mysql::protocol::response::{EofPacket, OkPacket};
 
+const MAX_PACKET_LEN: usize = 0xFF_FF_FF;
+
 #[derive(Debug)]
 pub struct Packet<T>(pub T);
 
@@ -29,12 +31,29 @@ where
         // determine the length of the encoded payload
         // and write to our reserved space
         let len = buf.len() - offset - 4;
-        let header = &mut buf[offset..];
 
-        // FIXME: Support larger packets
-        assert!(len < 0xFF_FF_FF);
+        if len >= MAX_PACKET_LEN {
+            let payload = buf.split_off(offset + 4);
+            buf.truncate(offset);
 
-        header[..4].copy_from_slice(&(len as u32).to_le_bytes());
+            let mut remaining = payload.as_slice();
+            while remaining.len() >= MAX_PACKET_LEN {
+                buf.extend_from_slice(&(MAX_PACKET_LEN as u32).to_le_bytes()[..3]);
+                buf.push(*sequence_id);
+                *sequence_id = sequence_id.wrapping_add(1);
+                buf.extend_from_slice(&remaining[..MAX_PACKET_LEN]);
+                remaining = &remaining[MAX_PACKET_LEN..];
+            }
+
+            buf.extend_from_slice(&(remaining.len() as u32).to_le_bytes()[..3]);
+            buf.push(*sequence_id);
+            buf.extend_from_slice(remaining);
+            *sequence_id = sequence_id.wrapping_add(1);
+            return;
+        }
+
+        let header = &mut buf[offset..offset + 4];
+        header[..3].copy_from_slice(&(len as u32).to_le_bytes()[..3]);
         header[3] = *sequence_id;
 
         *sequence_id = sequence_id.wrapping_add(1);

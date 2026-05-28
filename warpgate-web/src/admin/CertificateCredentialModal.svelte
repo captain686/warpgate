@@ -38,6 +38,7 @@
     let generatedCertificatePem = $state('')
     let generatedKubeConfig = $state('')
     let storeInBrowser = $state(false)
+    let errorText: string | undefined = $state()
 
     $effect(() => {
         if (isOpen) {
@@ -69,18 +70,21 @@
             publicKeyPem = `-----BEGIN PUBLIC KEY-----\n${publicKeyLines.join('\n')}\n-----END PUBLIC KEY-----`
         } catch (error) {
             console.error('Failed to generate key pair:', error)
-            alert('Failed to generate key pair. Please try again.')
+            errorText = 'Failed to generate key pair. Please try again.'
         }
     }
 
     async function _generate() {
+        errorText = undefined
         if (!label.trim()) {
-            alert('Please provide a label')
+            errorText = 'Please provide a label'
             return
         }
 
         saving = true
         try {
+            privateKeyPem = ''
+            publicKeyPem = ''
             await generateKeyPair()
 
             if (!publicKeyPem) {
@@ -107,7 +111,7 @@
             }
         } catch (error) {
             console.error('Failed to generate certificate:', error)
-            alert('Failed to generate certificate. Please try again.')
+            errorText = 'Failed to generate certificate. Please try again.'
         } finally {
             saving = false
         }
@@ -148,7 +152,9 @@
         publicKeyPem = ''
         label = ''
         generatedCertificatePem = ''
+        generatedKubeConfig = ''
         storeInBrowser = false
+        errorText = undefined
         saving = false
         onClose?.()
     }
@@ -156,6 +162,10 @@
 
 <Modal {isOpen} toggle={close}>
     <ModalBody>
+        {#if errorText}
+            <Alert color="danger" fade={false}>{errorText}</Alert>
+        {/if}
+
         {#if generatedCertificatePem}
             <div class="text-center mb-3">
                 <Fa icon={faCheck} class="m-auto" size="lg" />

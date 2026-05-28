@@ -144,16 +144,18 @@ impl<S: AsyncRead + AsyncWrite + Send + Unpin> PostgresSession<S> {
                 let mut auth_ok_sent = false;
 
                 loop {
-                    let user_auth_result = state_arc.lock().await.verify();
+                    let (state_id, user_auth_result) = {
+                        let state = state_arc.lock().await;
+                        (*state.id(), state.verify())
+                    };
 
-                    match user_auth_result {
+                    match user_auth_result.clone() {
                         AuthResult::Accepted { user_info } => {
                             self.services
                                 .auth_state_store
                                 .lock()
                                 .await
-                                .complete(state_arc.lock().await.id())
-                                .await;
+                                .complete_with_result(&state_id, user_auth_result);
                             let target_auth_result = {
                                 self.services
                                     .config_provider

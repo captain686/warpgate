@@ -66,17 +66,19 @@
 
 <style lang="scss">
     a {
+        color: var(--bs-body-color);
         cursor: pointer;
         display: flex;
         width: 100%;
         text-decoration: none;
         padding: .65rem .875rem;
-        border-radius: var(--bs-border-radius);
+        border-radius: var(--wg-option-radius);
         align-items: center;
         gap: .75rem;
         transition:
             background-color .12s ease-out,
             color .12s ease-out,
+            box-shadow .12s ease-out,
             transform .08s ease-out;
 
         .text {
@@ -84,18 +86,31 @@
             min-width: 0;
         }
 
-        &:hover, &.active {
-            background: var(--bs-list-group-action-hover-bg);
+        &:hover,
+        &:focus-visible {
+            background: var(--wg-option-hover-bg);
+            color: var(--wg-option-hover-color);
             .title {
-                color: var(--bs-list-group-action-hover-color);
+                color: var(--wg-option-hover-color);
             }
         }
 
+        &:focus-visible {
+            box-shadow: var(--wg-option-focus-ring);
+            outline: none;
+        }
+
         &:active {
-            background: var(--bs-list-group-action-active-bg);
             transform: translateY(1px);
+        }
+
+        &.active {
+            background: var(--wg-option-active-bg);
+            color: var(--wg-option-active-color);
+            box-shadow: var(--wg-option-active-indicator);
+
             .title {
-                color: var(--bs-list-group-action-active-color);
+                color: var(--wg-option-active-color);
             }
         }
 
@@ -115,7 +130,9 @@
         }
 
         &.link:hover .icon,
+        &.link:focus-visible .icon,
         &.active .icon {
+            color: currentColor;
             opacity: 1;
         }
 

@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use time::OffsetDateTime;
 use tokio::sync::{Mutex, broadcast};
 use tracing::error;
@@ -15,6 +15,8 @@ use warpgate_db_entities::Session;
 use crate::logging::AuditEvent;
 use crate::rate_limiting::{RateLimiterRegistry, RateLimiterStackHandle};
 use crate::{SessionHandle, WarpgateServerHandle};
+
+const SESSION_CHANGE_CHANNEL_CAPACITY: usize = 128;
 
 pub struct State {
     pub sessions: HashMap<SessionId, Arc<Mutex<SessionState>>>,
@@ -28,7 +30,7 @@ impl State {
         db: &Arc<Mutex<DatabaseConnection>>,
         rate_limiter_registry: &Arc<Mutex<RateLimiterRegistry>>,
     ) -> Arc<Mutex<Self>> {
-        let sender = broadcast::channel(2).0;
+        let sender = broadcast::channel(SESSION_CHANGE_CHANNEL_CAPACITY).0;
         Arc::new(Mutex::new(Self {
             sessions: HashMap::new(),
             db: db.clone(),
@@ -68,12 +70,14 @@ impl State {
                 ..Default::default()
             };
 
-            let db = self_.db.lock().await;
-            values
-                .insert(&*db)
-                .await
-                .context("Error inserting session")
-                .map_err(WarpgateError::from)?;
+            let insert_result = {
+                let db = self_.db.lock().await;
+                values.insert(&*db).await.context("Error inserting session")
+            };
+            if let Err(error) = insert_result {
+                self_.sessions.remove(&id);
+                return Err(WarpgateError::from(error));
+            }
         }
 
         let _ = self_.change_sender.send(());
@@ -92,7 +96,7 @@ impl State {
     }
 
     pub async fn remove_session(&mut self, id: SessionId) {
-        if let Some(session_state) = self.sessions.remove(&id) {
+        let removed_from_memory = if let Some(session_state) = self.sessions.remove(&id) {
             let state_guard = session_state.lock().await;
             if let (Some(user_info), Some(target)) = (&state_guard.user_info, &state_guard.target) {
                 AuditEvent::TargetSessionEnded {
@@ -104,26 +108,37 @@ impl State {
                 }
                 .emit();
             }
-        }
+            true
+        } else {
+            false
+        };
 
-        if let Err(error) = self.mark_session_complete(id).await {
-            error!(%error, %id, "Could not update session in the DB");
-        }
+        let updated_in_db = match self.mark_session_complete(id).await {
+            Ok(updated) => updated,
+            Err(error) => {
+                error!(%error, %id, "Could not update session in the DB");
+                false
+            }
+        };
 
-        let _ = self.change_sender.send(());
+        if removed_from_memory || updated_in_db {
+            let _ = self.change_sender.send(());
+        }
     }
 
-    async fn mark_session_complete(&self, id: Uuid) -> Result<()> {
+    async fn mark_session_complete(&self, id: Uuid) -> Result<bool> {
         use sea_orm::ActiveValue::Set;
         let db = self.db.lock().await;
-        let session = Session::Entity::find_by_id(id)
-            .one(&*db)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
-        let mut model: Session::ActiveModel = session.into();
-        model.ended = Set(Some(OffsetDateTime::now_utc()));
-        model.update(&*db).await?;
-        Ok(())
+        let result = Session::Entity::update_many()
+            .set(Session::ActiveModel {
+                ended: Set(Some(OffsetDateTime::now_utc())),
+                ..Default::default()
+            })
+            .filter(Session::Column::Id.eq(id))
+            .filter(Session::Column::Ended.is_null())
+            .exec(&*db)
+            .await?;
+        Ok(result.rows_affected > 0)
     }
 }
 

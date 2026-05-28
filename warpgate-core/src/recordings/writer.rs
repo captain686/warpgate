@@ -132,7 +132,10 @@ impl RecordingWriter {
     }
 
     pub async fn write(&self, data: &[u8]) -> Result<()> {
-        let data = Bytes::from(data.to_vec());
+        self.write_bytes(Bytes::copy_from_slice(data)).await
+    }
+
+    pub async fn write_bytes(&self, data: Bytes) -> Result<()> {
         self.sender
             .send(RecordingWriterCommand::Write(data.clone()))
             .await

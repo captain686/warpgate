@@ -10,6 +10,7 @@
     import * as rx from 'rxjs'
     import Tooltip from 'common/sveltestrap-s5-ports/Tooltip.svelte'
     import { adminPermissions, ADMIN_PERMISSIONS, type AdminPermissionDef } from '../lib/store'
+    import ConfirmModal from 'common/ConfirmModal.svelte'
 
     interface Props {
         params: { id: string };
@@ -19,6 +20,7 @@
 
     let error: string|null = $state(null)
     let role: AdminRole | undefined = $state()
+    let deleteRoleModalOpen = $state(false)
     const initPromise = init()
 
     let disabled = $state(false)
@@ -111,11 +113,13 @@
         }
     }
 
+    function requestRemove () {
+        deleteRoleModalOpen = true
+    }
+
     async function remove () {
-        if (confirm(`Delete admin role ${role!.name}?`)) {
-            await api.deleteAdminRole(role!)
-            replace('/config/admin-roles')
-        }
+        await api.deleteAdminRole(role!)
+        replace('/config/admin-roles')
     }
 </script>
 
@@ -198,7 +202,7 @@
                 class="ms-2"
                 disabled={disabled}
                 color="danger"
-                click={remove}
+                click={requestRemove}
             >Remove</AsyncButton>
         </div>
 
@@ -225,3 +229,11 @@
         </ItemList>
     </Loadable>
 </div>
+
+<ConfirmModal
+    bind:isOpen={deleteRoleModalOpen}
+    title="Delete admin role"
+    message={`Delete admin role ${role?.name ?? ''}?`}
+    confirmLabel="Delete"
+    onConfirm={remove}
+/>

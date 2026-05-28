@@ -47,6 +47,7 @@
     import EmptyState from 'common/EmptyState.svelte'
     import Tooltip from 'common/sveltestrap-s5-ports/Tooltip.svelte'
     import { adminPermissions } from 'admin/lib/store'
+    import ConfirmModal from 'common/ConfirmModal.svelte'
 
     interface Props {
         userId: string
@@ -69,6 +70,13 @@
     let editingCertificateCredential = $state(false)
     let issuingPublicKey = $state(false)
     let selectedSshScopeId = $state('')
+    let credentialActionConfirmationOpen = $state(false)
+    let pendingCredentialAction: {
+        title: string
+        message: string
+        confirmLabel: string
+        run: () => Promise<void>
+    } | undefined = $state()
 
     const loadPromise = load()
 
@@ -174,12 +182,6 @@
     }
 
     async function deleteCredential (credential: ExistingCredential) {
-        if (credential.kind === CredentialKind.Certificate) {
-            if (!confirm('Permanently revoke certificate? This cannot be undone.')) {
-                return
-            }
-        }
-
         if (credential.kind === CredentialKind.Password) {
             await api.deletePasswordCredential({
                 id: credential.id,
@@ -217,6 +219,21 @@
         }
 
         credentials = credentials.filter(c => c !== credential)
+    }
+
+    function requestDeleteCredential (credential: ExistingCredential) {
+        if (credential.kind === CredentialKind.Certificate) {
+            pendingCredentialAction = {
+                title: 'Revoke certificate',
+                message: 'Permanently revoke certificate? This cannot be undone.',
+                confirmLabel: 'Revoke',
+                run: () => deleteCredential(credential),
+            }
+            credentialActionConfirmationOpen = true
+            return
+        }
+
+        void deleteCredential(credential)
     }
 
     async function createPassword (password: string) {
@@ -413,10 +430,6 @@
     }
 
     async function revokeIssuedPublicKeyCredential(credential: ExtendedPublicKeyCredential) {
-        if (!confirm('Revoke this issued SSH key? This cannot be undone.')) {
-            return
-        }
-
         await api.revokePublicKeyCredential({
             userId,
             id: credential.id,
@@ -432,6 +445,21 @@
                 usesLeft: 0,
             }
         })
+    }
+
+    function requestRevokeIssuedPublicKeyCredential(credential: ExtendedPublicKeyCredential) {
+        pendingCredentialAction = {
+            title: 'Revoke issued SSH key',
+            message: 'Revoke this issued SSH key? This cannot be undone.',
+            confirmLabel: 'Revoke',
+            run: () => revokeIssuedPublicKeyCredential(credential),
+        }
+        credentialActionConfirmationOpen = true
+    }
+
+    async function confirmPendingCredentialAction() {
+        await pendingCredentialAction?.run()
+        pendingCredentialAction = undefined
     }
 
     async function saveCertificateCredential (label: string, publicKeyPem: string) {
@@ -609,7 +637,7 @@
                 color="link"
                 disabled={ldapLinked || !$adminPermissions.usersEdit}
                 on:click={e => {
-                    revokeIssuedPublicKeyCredential(credential)
+                    requestRevokeIssuedPublicKeyCredential(credential)
                     e.preventDefault()
                 }}>
                 Revoke
@@ -621,7 +649,7 @@
                 color="link"
                 disabled={credential.kind === CredentialKind.PublicKey && (ldapLinked || !$adminPermissions.usersEdit)}
                 on:click={e => {
-                    deleteCredential(credential)
+                    requestDeleteCredential(credential)
                     e.preventDefault()
                 }}>
                 Delete
@@ -653,6 +681,14 @@
         {/each}
     </div>
 </Loadable>
+
+<ConfirmModal
+    bind:isOpen={credentialActionConfirmationOpen}
+    title={pendingCredentialAction?.title ?? ''}
+    message={pendingCredentialAction?.message ?? ''}
+    confirmLabel={pendingCredentialAction?.confirmLabel ?? 'Confirm'}
+    onConfirm={confirmPendingCredentialAction}
+/>
 
 {#if creatingPassword}
 <CreatePasswordModal

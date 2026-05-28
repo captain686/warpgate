@@ -6,6 +6,8 @@ use tracing::trace;
 use warpgate_database_protocols::io::Encode;
 use warpgate_tls::{MaybeTlsStream, MaybeTlsStreamError, UpgradableStream};
 
+const STREAM_BUFFER_CAPACITY: usize = 16 * 1024;
+
 #[derive(thiserror::Error, Debug)]
 pub enum MySqlStreamError {
     #[error("packet codec error: {0}")]
@@ -23,6 +25,7 @@ where
     codec: PacketCodec,
     inbound_buffer: BytesMut,
     outbound_buffer: BytesMut,
+    encode_buffer: Vec<u8>,
 }
 
 impl<S, TS> MySqlStream<S, TS>
@@ -34,8 +37,9 @@ where
         Self {
             stream: MaybeTlsStream::new(stream),
             codec: PacketCodec::default(),
-            inbound_buffer: BytesMut::new(),
-            outbound_buffer: BytesMut::new(),
+            inbound_buffer: BytesMut::with_capacity(STREAM_BUFFER_CAPACITY),
+            outbound_buffer: BytesMut::with_capacity(STREAM_BUFFER_CAPACITY),
+            encode_buffer: Vec::with_capacity(STREAM_BUFFER_CAPACITY),
         }
     }
 
@@ -44,22 +48,23 @@ where
         packet: &'a P,
         context: C,
     ) -> Result<(), MySqlStreamError> {
-        let mut buf = vec![];
-        packet.encode_with(&mut buf, context);
-        self.codec.encode(&mut &*buf, &mut self.outbound_buffer)?;
+        self.encode_buffer.clear();
+        packet.encode_with(&mut self.encode_buffer, context);
+        let mut encoded = self.encode_buffer.as_slice();
+        self.codec.encode(&mut encoded, &mut self.outbound_buffer)?;
         Ok(())
     }
 
     pub async fn flush(&mut self) -> std::io::Result<()> {
         trace!(outbound_buffer=?self.outbound_buffer, "sending");
-        self.stream.write_all(&self.outbound_buffer[..]).await?;
-        self.outbound_buffer = BytesMut::new();
+        self.stream.write_all(self.outbound_buffer.as_ref()).await?;
+        self.outbound_buffer.clear();
         self.stream.flush().await?;
         Ok(())
     }
 
     pub async fn recv(&mut self) -> Result<Option<Bytes>, MySqlStreamError> {
-        let mut payload = BytesMut::new();
+        let mut payload = BytesMut::with_capacity(STREAM_BUFFER_CAPACITY);
         loop {
             {
                 let got_full_packet = self.codec.decode(&mut self.inbound_buffer, &mut payload)?;

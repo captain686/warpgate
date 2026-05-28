@@ -143,42 +143,53 @@ impl Api {
     ) -> poem::Result<LoginResponse> {
         let services = ctx.services();
         let remote_ip = req.remote_addr().as_socket_addr().map(|a| a.ip());
-        let mut auth_state_store = services.auth_state_store.lock().await;
-        let state_arc = match get_auth_state_for_request(
-            &body.username,
-            session,
-            &mut auth_state_store,
-            remote_ip,
-        )
-        .await
-        {
-            Err(WarpgateError::UserNotFound(_)) => {
-                return Ok(LoginResponse::Failure(Json(LoginFailureResponse {
-                    state: ApiAuthState::Failed,
-                })));
-            }
-            Err(WarpgateError::IpAddrNotAllowed(..)) => {
-                return Ok(LoginResponse::Failure(Json(LoginFailureResponse {
-                    state: ApiAuthState::IpRejected,
-                })));
-            }
-            x => x,
-        }?;
-        let mut state = state_arc.lock().await;
-
-        let mut cp = services.config_provider.lock().await;
+        let state_arc = {
+            let mut auth_state_store = services.auth_state_store.lock().await;
+            match get_auth_state_for_request(
+                &body.username,
+                session,
+                &mut auth_state_store,
+                remote_ip,
+            )
+            .await
+            {
+                Err(WarpgateError::UserNotFound(_)) => {
+                    return Ok(LoginResponse::Failure(Json(LoginFailureResponse {
+                        state: ApiAuthState::Failed,
+                    })));
+                }
+                Err(WarpgateError::IpAddrNotAllowed(..)) => {
+                    return Ok(LoginResponse::Failure(Json(LoginFailureResponse {
+                        state: ApiAuthState::IpRejected,
+                    })));
+                }
+                x => x,
+            }?
+        };
 
         let password_cred = AuthCredential::Password(Secret::new(body.password.clone()));
-        if cp
-            .validate_credential(&state.user_info().username, &password_cred, None)
-            .await?
-        {
-            state.add_valid_credential(password_cred);
-        }
+        let credential_valid = services
+            .config_provider
+            .lock()
+            .await
+            .validate_credential(&body.username, &password_cred, None)
+            .await?;
 
-        match state.verify() {
+        let (state_id, auth_result) = {
+            let mut state = state_arc.lock().await;
+            if credential_valid {
+                state.add_valid_credential(password_cred);
+            }
+            (*state.id(), state.verify())
+        };
+
+        match auth_result.clone() {
             AuthResult::Accepted { user_info } => {
-                auth_state_store.complete(state.id()).await;
+                services
+                    .auth_state_store
+                    .lock()
+                    .await
+                    .complete_with_result(&state_id, auth_result);
                 authorize_session(req, &ctx, user_info).await?;
                 Ok(LoginResponse::Success)
             }
@@ -202,31 +213,41 @@ impl Api {
         let services = ctx.services();
         let state_id = session.get_auth_state_id();
 
-        let mut auth_state_store = services.auth_state_store.lock().await;
-
-        let Some(state_arc) = state_id.and_then(|id| auth_state_store.get(&id.0)) else {
+        let Some(state_arc) = ({
+            let auth_state_store = services.auth_state_store.lock().await;
+            state_id.and_then(|id| auth_state_store.get(&id.0))
+        }) else {
             return Ok(LoginResponse::Failure(Json(LoginFailureResponse {
                 state: ApiAuthState::NotStarted,
             })));
         };
 
-        let mut state = state_arc.lock().await;
-
-        let mut cp = services.config_provider.lock().await;
-
         let otp_cred = AuthCredential::Otp(body.otp.clone().into());
-        if cp
-            .validate_credential(&state.user_info().username, &otp_cred, None)
-            .await?
-        {
-            state.add_valid_credential(otp_cred);
-        } else {
-            warn!("Invalid OTP for user {}", state.user_info().username);
-        }
+        let username = state_arc.lock().await.user_info().username.clone();
+        let credential_valid = services
+            .config_provider
+            .lock()
+            .await
+            .validate_credential(&username, &otp_cred, None)
+            .await?;
 
-        match state.verify() {
+        let (state_id, auth_result) = {
+            let mut state = state_arc.lock().await;
+            if credential_valid {
+                state.add_valid_credential(otp_cred);
+            } else {
+                warn!("Invalid OTP for user {}", state.user_info().username);
+            }
+            (*state.id(), state.verify())
+        };
+
+        match auth_result.clone() {
             AuthResult::Accepted { user_info } => {
-                auth_state_store.complete(state.id()).await;
+                services
+                    .auth_state_store
+                    .lock()
+                    .await
+                    .complete_with_result(&state_id, auth_result);
                 authorize_session(req, &ctx, user_info).await?;
                 Ok(LoginResponse::Success)
             }
@@ -288,8 +309,12 @@ impl Api {
         let Some(state_arc) = store.get(&state_id.0) else {
             return Ok(AuthStateResponse::NotFound);
         };
-        state_arc.lock().await.reject();
-        store.complete(&state_id.0).await;
+        let auth_result = {
+            let mut state = state_arc.lock().await;
+            state.reject();
+            state.verify()
+        };
+        store.complete_with_result(&state_id.0, auth_result);
         session.clear_auth_state();
 
         serialize_auth_state_inner(state_arc, services)
@@ -375,7 +400,7 @@ impl Api {
 
         if let AuthResult::Accepted { .. } = auth_result {
             let mut store = services.auth_state_store.lock().await;
-            store.complete(&id).await;
+            store.complete_with_result(&id, auth_result);
         }
         serialize_auth_state_inner(state_arc, services)
             .await
@@ -399,8 +424,16 @@ impl Api {
         let Some(state_arc) = get_auth_state(&id, &ctx).await else {
             return Ok(AuthStateResponse::NotFound);
         };
-        state_arc.lock().await.reject();
-        services.auth_state_store.lock().await.complete(&id).await;
+        let auth_result = {
+            let mut state = state_arc.lock().await;
+            state.reject();
+            state.verify()
+        };
+        services
+            .auth_state_store
+            .lock()
+            .await
+            .complete_with_result(&id, auth_result);
         serialize_auth_state_inner(state_arc, services)
             .await
             .map(Json)

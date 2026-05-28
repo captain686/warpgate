@@ -107,11 +107,10 @@ impl SessionChannel {
                 channel_event = self.client_channel.wait() => {
                     match channel_event {
                         Some(russh::ChannelMsg::Data { data }) => {
-                            let bytes: &[u8] = &data;
-                            debug!("channel data: {bytes:?}");
+                            debug!("channel data: {:?}", data.as_ref());
                             self.events_tx.send(RCEvent::Output(
                                 self.channel_id,
-                                Bytes::from(bytes.to_vec()),
+                                Bytes::copy_from_slice(data.as_ref()),
                             )).await.map_err(|_| SshClientError::MpscError)?;
                         }
                         Some(russh::ChannelMsg::Close) => {
@@ -138,10 +137,9 @@ impl SessionChannel {
                         },
                         Some(russh::ChannelMsg::WindowAdjusted { .. } | russh::ChannelMsg::XonXoff { .. }) => { }
                         Some(russh::ChannelMsg::ExtendedData { data, ext }) => {
-                            let data: &[u8] = &data;
                             self.events_tx.send(RCEvent::ExtendedData {
                                 channel: self.channel_id,
-                                data: Bytes::from(data.to_vec()),
+                                data: Bytes::copy_from_slice(data.as_ref()),
                                 ext,
                             }).await.map_err(|_| SshClientError::MpscError)?;
                         }

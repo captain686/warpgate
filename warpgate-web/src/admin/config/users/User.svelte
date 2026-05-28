@@ -23,6 +23,7 @@
     import PageSummaryBar from 'common/PageSummaryBar.svelte'
     import SectionedForm from 'admin/lib/SectionedForm.svelte'
     import Section from 'admin/lib/Section.svelte'
+    import ConfirmModal from 'common/ConfirmModal.svelte'
 
     interface Props {
         params: { id: string };
@@ -38,6 +39,7 @@
 
     // Modal states
     let showExpiryModal = $state(false)
+    let deleteUserModalOpen = $state(false)
     let editingRole: UserRoleAssignmentResponse | null = $state(null)
     let expiryDate: string | null = $state(null)
     let selectedExpiryPreset: string | null = $state(null)
@@ -114,11 +116,13 @@
         }
     }
 
+    function requestRemove () {
+        deleteUserModalOpen = true
+    }
+
     async function remove () {
-        if (confirm(`Delete user ${user!.username}?`)) {
-            await api.deleteUser(user!)
-            replace('/config/users')
-        }
+        await api.deleteUser(user!)
+        replace('/config/users')
     }
 
     async function toggleRole (role: Role) {
@@ -449,7 +453,7 @@
 
             <AsyncButton
                 color="danger"
-                click={remove}
+                click={requestRemove}
                 disabled={!$adminPermissions.usersDelete}
             >Remove</AsyncButton>
         </StickyActionBar>
@@ -469,6 +473,14 @@
         min-height: 0;
     }
 </style>
+
+<ConfirmModal
+    bind:isOpen={deleteUserModalOpen}
+    title="Delete user"
+    message={`Delete user ${user?.username ?? ''}?`}
+    confirmLabel="Delete"
+    onConfirm={remove}
+/>
 
 <!-- Expiry Modal -->
 <Modal isOpen={showExpiryModal} toggle={() => showExpiryModal = false}>

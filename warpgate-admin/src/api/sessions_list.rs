@@ -7,6 +7,8 @@ use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, OpenApi};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+use tokio::sync::broadcast::error::RecvError;
+use tracing::debug;
 use warpgate_common::{AdminPermission, WarpgateError};
 use warpgate_common_http::AuthenticatedRequestContext;
 use warpgate_core::SessionSnapshot;
@@ -88,11 +90,18 @@ impl Api {
     ) -> poem::Result<CloseAllSessionsResponse> {
         require_admin_permission(&ctx, Some(AdminPermission::SessionsTerminate)).await?;
 
-        let state = ctx.services().state.lock().await;
+        let mut state = ctx.services().state.lock().await;
+        let session_ids = state.sessions.keys().copied().collect::<Vec<_>>();
 
-        for s in state.sessions.values() {
-            let mut session = s.lock().await;
-            session.handle.close();
+        for id in &session_ids {
+            if let Some(s) = state.sessions.get(id) {
+                let mut session = s.lock().await;
+                session.handle.close();
+            }
+        }
+
+        for id in session_ids {
+            state.remove_session(id).await;
         }
 
         session.purge();
@@ -114,8 +123,20 @@ pub async fn api_get_sessions_changes_stream(
         .on_upgrade(|socket| async move {
             let (mut sink, _) = socket.split();
 
-            while receiver.recv().await.is_ok() {
-                sink.send(Message::Text("".into())).await?;
+            loop {
+                match receiver.recv().await {
+                    Ok(()) => {
+                        sink.send(Message::Text("".into())).await?;
+                    }
+                    Err(RecvError::Lagged(skipped)) => {
+                        debug!(
+                            skipped,
+                            "Session change stream lagged; sending latest-state notification"
+                        );
+                        sink.send(Message::Text("".into())).await?;
+                    }
+                    Err(RecvError::Closed) => break,
+                }
             }
 
             Ok::<(), anyhow::Error>(())

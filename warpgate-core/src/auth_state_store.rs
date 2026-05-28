@@ -167,19 +167,17 @@ impl AuthStateStore {
             }
         });
 
-        let state = AuthState::new(
+        let state = Arc::new(Mutex::new(AuthState::new(
             id,
             session_id.copied(),
             (&user).into(),
             protocol.to_string(),
             policy,
             state_change_tx,
-        );
-        self.store
-            .insert(id, (Arc::new(Mutex::new(state)), Instant::now()));
+        )));
+        self.store.insert(id, (state.clone(), Instant::now()));
 
-        #[allow(clippy::unwrap_used)]
-        Ok((id, self.get(&id).unwrap()))
+        Ok((id, state))
     }
 
     pub fn subscribe(&mut self, id: Uuid) -> broadcast::Receiver<AuthResult> {
@@ -198,8 +196,13 @@ impl AuthStateStore {
         let Some((state, _)) = self.store.get(id) else {
             return;
         };
+        let result = state.lock().await.verify();
+        self.complete_with_result(id, result);
+    }
+
+    pub fn complete_with_result(&mut self, id: &Uuid, result: AuthResult) {
         if let Some(sig) = self.completion_signals.remove(id) {
-            let _ = sig.sender.send(state.lock().await.verify());
+            let _ = sig.sender.send(result);
         }
     }
 
@@ -221,60 +224,70 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ip_allowed_no_restriction() {
-        let ip: IpAddr = "10.0.0.5".parse().unwrap();
+    fn ip_allowed_no_restriction() -> anyhow::Result<()> {
+        let ip: IpAddr = "10.0.0.5".parse()?;
         assert!(check_ip_allowed(None, Some(ip), "user").is_ok());
+        Ok(())
     }
 
     #[test]
-    fn ip_allowed_no_remote_ip() {
-        let range = Some(vec![IpNet::from_str("10.0.0.0/8").unwrap().into()]);
+    fn ip_allowed_no_remote_ip() -> anyhow::Result<()> {
+        let range = Some(vec![IpNet::from_str("10.0.0.0/8")?.into()]);
         assert!(check_ip_allowed(range.as_ref(), None, "user").is_ok());
+        Ok(())
     }
 
     #[test]
-    fn ip_allowed_within_range() {
-        let range = Some(vec![IpNet::from_str("192.168.1.0/24").unwrap().into()]);
-        let ip: IpAddr = "192.168.1.42".parse().unwrap();
+    fn ip_allowed_within_range() -> anyhow::Result<()> {
+        let range = Some(vec![IpNet::from_str("192.168.1.0/24")?.into()]);
+        let ip: IpAddr = "192.168.1.42".parse()?;
         assert!(check_ip_allowed(range.as_ref(), Some(ip), "user").is_ok());
+        Ok(())
     }
 
     #[test]
-    fn ip_denied_outside_range() {
-        let range = Some(vec![IpNet::from_str("192.168.1.0/24").unwrap().into()]);
-        let ip: IpAddr = "10.0.0.1".parse().unwrap();
-        let err = check_ip_allowed(range.as_ref(), Some(ip), "testuser").unwrap_err();
+    fn ip_denied_outside_range() -> anyhow::Result<()> {
+        let range = Some(vec![IpNet::from_str("192.168.1.0/24")?.into()]);
+        let ip: IpAddr = "10.0.0.1".parse()?;
+        let Err(err) = check_ip_allowed(range.as_ref(), Some(ip), "testuser") else {
+            anyhow::bail!("expected IP range denial");
+        };
         assert!(
             matches!(err, WarpgateError::IpAddrNotAllowed(addr, user) if addr == "10.0.0.1" && user == "testuser")
         );
+        Ok(())
     }
 
     #[test]
-    fn ip_allowed_exact_match() {
-        let range = Some(vec![IpNet::from_str("10.20.30.40/32").unwrap().into()]);
-        let ip: IpAddr = "10.20.30.40".parse().unwrap();
+    fn ip_allowed_exact_match() -> anyhow::Result<()> {
+        let range = Some(vec![IpNet::from_str("10.20.30.40/32")?.into()]);
+        let ip: IpAddr = "10.20.30.40".parse()?;
         assert!(check_ip_allowed(range.as_ref(), Some(ip), "user").is_ok());
+        Ok(())
     }
 
     #[test]
-    fn ip_denied_exact_mismatch() {
-        let range = Some(vec![IpNet::from_str("10.20.30.40/32").unwrap().into()]);
-        let ip: IpAddr = "10.20.30.41".parse().unwrap();
+    fn ip_denied_exact_mismatch() -> anyhow::Result<()> {
+        let range = Some(vec![IpNet::from_str("10.20.30.40/32")?.into()]);
+        let ip: IpAddr = "10.20.30.41".parse()?;
         assert!(check_ip_allowed(range.as_ref(), Some(ip), "user").is_err());
+        Ok(())
     }
 
     #[test]
-    fn ipv6_allowed_within_range() {
-        let range = Some(vec![IpNet::from_str("fd00::/8").unwrap().into()]);
-        let ip: IpAddr = "fd12:3456::1".parse().unwrap();
+    fn ipv6_allowed_within_range() -> anyhow::Result<()> {
+        let range = Some(vec![IpNet::from_str("fd00::/8")?.into()]);
+        let ip: IpAddr = "fd12:3456::1".parse()?;
         assert!(check_ip_allowed(range.as_ref(), Some(ip), "user").is_ok());
+        Ok(())
     }
 
     #[test]
-    fn ipv6_denied_outside_range() {
-        let range = Some(vec![IpNet::from_str("fd00::/8").unwrap().into()]);
-        let ip: IpAddr = "2001:db8::1".parse().unwrap();
+    fn ipv6_denied_outside_range() -> anyhow::Result<()> {
+        let range = Some(vec![IpNet::from_str("fd00::/8")?.into()]);
+        let ip: IpAddr = "2001:db8::1".parse()?;
         assert!(check_ip_allowed(range.as_ref(), Some(ip), "user").is_err());
+        Ok(())
     }
 
     #[test]
@@ -283,23 +296,26 @@ mod tests {
     }
 
     #[test]
-    fn ip_allowed_empty_ranges_treated_as_no_restriction() {
-        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+    fn ip_allowed_empty_ranges_treated_as_no_restriction() -> anyhow::Result<()> {
+        let ip: IpAddr = "10.0.0.1".parse()?;
         assert!(check_ip_allowed(Some(&vec![]), Some(ip), "user").is_ok());
+        Ok(())
     }
 
     #[test]
-    fn ipv4_mapped_ipv6_matches_ipv4_range() {
-        let range = Some(vec![IpNet::from_str("192.168.1.0/24").unwrap().into()]);
+    fn ipv4_mapped_ipv6_matches_ipv4_range() -> anyhow::Result<()> {
+        let range = Some(vec![IpNet::from_str("192.168.1.0/24")?.into()]);
         // ::ffff:192.168.1.42 is the IPv4-mapped IPv6 form of 192.168.1.42
-        let ip: IpAddr = "::ffff:192.168.1.42".parse().unwrap();
+        let ip: IpAddr = "::ffff:192.168.1.42".parse()?;
         assert!(check_ip_allowed(range.as_ref(), Some(ip), "user").is_ok());
+        Ok(())
     }
 
     #[test]
-    fn ipv4_mapped_ipv6_denied_outside_ipv4_range() {
-        let range = Some(vec![IpNet::from_str("192.168.1.0/24").unwrap().into()]);
-        let ip: IpAddr = "::ffff:10.0.0.1".parse().unwrap();
+    fn ipv4_mapped_ipv6_denied_outside_ipv4_range() -> anyhow::Result<()> {
+        let range = Some(vec![IpNet::from_str("192.168.1.0/24")?.into()]);
+        let ip: IpAddr = "::ffff:10.0.0.1".parse()?;
         assert!(check_ip_allowed(range.as_ref(), Some(ip), "user").is_err());
+        Ok(())
     }
 }

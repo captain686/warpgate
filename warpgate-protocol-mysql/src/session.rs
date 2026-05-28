@@ -89,7 +89,7 @@ impl<S: AsyncRead + AsyncWrite + Send + Unpin> MySqlSession<S> {
     }
 
     pub async fn run(mut self) -> Result<(), MySqlError> {
-        let mut challenge_1 = BytesMut::from(&self.challenge[..]);
+        let mut challenge_1 = BytesMut::from(self.challenge.as_slice());
         let challenge_2 = challenge_1.split_off(8);
         let challenge_chain = challenge_1.freeze().chain(challenge_2.freeze());
 
@@ -204,30 +204,28 @@ impl<S: AsyncRead + AsyncWrite + Send + Unpin> MySqlSession<S> {
                     )
                     .await?
                     .1;
-                let mut state = state_arc.lock().await;
-
-                let user_auth_result = {
-                    let credential = AuthCredential::Password(password);
-
+                let credential = AuthCredential::Password(password);
+                let credential_valid = {
                     let mut cp = self.services.config_provider.lock().await;
-                    if cp
-                        .validate_credential(&username, &credential, Some(&target_name))
+                    cp.validate_credential(&username, &credential, Some(&target_name))
                         .await?
-                    {
-                        state.add_valid_credential(credential);
-                    }
-
-                    state.verify()
                 };
 
-                match user_auth_result {
+                let (state_id, user_auth_result) = {
+                    let mut state = state_arc.lock().await;
+                    if credential_valid {
+                        state.add_valid_credential(credential);
+                    }
+                    (*state.id(), state.verify())
+                };
+
+                match user_auth_result.clone() {
                     AuthResult::Accepted { user_info } => {
                         self.services
                             .auth_state_store
                             .lock()
                             .await
-                            .complete(state.id())
-                            .await;
+                            .complete_with_result(&state_id, user_auth_result.clone());
                         let target_auth_result = {
                             self.services
                                 .config_provider
@@ -378,7 +376,8 @@ impl<S: AsyncRead + AsyncWrite + Send + Unpin> MySqlSession<S> {
                         return Err(MySqlError::Eof);
                     };
                     trace!(?response, "client got packet");
-                    self.stream.push(&&response[..], ())?;
+                    let response = response.as_ref();
+                    self.stream.push(&response, ())?;
                     self.stream.flush().await?;
                     if let Some(com) = response.first() {
                         if com == &0xfe {
@@ -406,12 +405,14 @@ impl<S: AsyncRead + AsyncWrite + Send + Unpin> MySqlSession<S> {
                 let db = buf.get_str(buf.len())?;
                 self.database = Some(db.clone());
                 info!("Selected database: {db}");
-                client.stream.push(&&payload[..], ())?;
+                let payload = payload.as_ref();
+                client.stream.push(&payload, ())?;
                 client.stream.flush().await?;
                 self.passthrough_until_result(&mut client).await?;
             // COM_FIELD_LIST, COM_PING, COM_RESET_CONNECTION
             } else if com == Some(&0x04) || com == Some(&0x0e) || com == Some(&0x1f) {
-                client.stream.push(&&payload[..], ())?;
+                let payload = payload.as_ref();
+                client.stream.push(&payload, ())?;
                 client.stream.flush().await?;
                 self.passthrough_until_result(&mut client).await?;
             } else if let Some(com) = com {
@@ -434,7 +435,8 @@ impl<S: AsyncRead + AsyncWrite + Send + Unpin> MySqlSession<S> {
                 return Err(MySqlError::Eof);
             };
             trace!(?response, "client got packet");
-            self.stream.push(&&response[..], ())?;
+            let response = response.as_ref();
+            self.stream.push(&response, ())?;
             self.stream.flush().await?;
             if let Some(com) = response.first()
                 && (com == &0 || com == &0xff || com == &0xfe)

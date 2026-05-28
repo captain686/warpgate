@@ -7,6 +7,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::trace;
 use warpgate_tls::{MaybeTlsStream, MaybeTlsStreamError, UpgradableStream};
 
+const STREAM_BUFFER_CAPACITY: usize = 16 * 1024;
+
 #[derive(thiserror::Error, Debug)]
 pub enum PostgresStreamError {
     #[error("decode: {0}")]
@@ -104,8 +106,8 @@ where
     pub fn new(stream: S) -> Self {
         Self {
             stream: MaybeTlsStream::new(stream),
-            inbound_buffer: BytesMut::new(),
-            outbound_buffer: BytesMut::new(),
+            inbound_buffer: BytesMut::with_capacity(STREAM_BUFFER_CAPACITY),
+            outbound_buffer: BytesMut::with_capacity(STREAM_BUFFER_CAPACITY),
         }
     }
 
@@ -120,8 +122,8 @@ where
     }
 
     pub async fn flush(&mut self) -> std::io::Result<()> {
-        self.stream.write_all(&self.outbound_buffer[..]).await?;
-        self.outbound_buffer = BytesMut::new();
+        self.stream.write_all(self.outbound_buffer.as_ref()).await?;
+        self.outbound_buffer.clear();
         self.stream.flush().await?;
         Ok(())
     }

@@ -85,7 +85,7 @@ pub async fn authorize_ticket(
     let db = db.lock().await;
     let ticket = {
         e::Ticket::Entity::find()
-            .filter(e::Ticket::Column::Secret.eq(&secret.expose_secret()[..]))
+            .filter(e::Ticket::Column::Secret.eq(secret.expose_secret()))
             .one(&*db)
             .await?
     };

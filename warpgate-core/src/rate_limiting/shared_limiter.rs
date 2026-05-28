@@ -17,8 +17,11 @@ impl SharedWarpgateRateLimiter {
     }
 
     pub fn lock(&self) -> SharedWarpgateRateLimiterGuard<'_> {
-        #[allow(clippy::unwrap_used, reason = "panic on poison")]
-        SharedWarpgateRateLimiterGuard::new(self.inner.lock().unwrap())
+        let guard = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        SharedWarpgateRateLimiterGuard::new(guard)
     }
 }
 

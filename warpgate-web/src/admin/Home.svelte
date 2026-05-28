@@ -5,7 +5,7 @@
     import { link } from 'svelte-spa-router'
     import { api, type SessionSnapshot } from 'admin/lib/api'
     import { formatDistance } from 'date-fns'
-    import { timer, Observable, switchMap, from, combineLatest, fromEvent, merge } from 'rxjs'
+    import { timer, Observable, switchMap, from, combineLatest, merge, map, share } from 'rxjs'
     import RelativeDate from './RelativeDate.svelte'
     import AsyncButton from 'common/AsyncButton.svelte'
     import ItemList, { type LoadOptions, type PaginatedResponse } from 'common/ItemList.svelte'
@@ -21,9 +21,46 @@
 
     let activeSessionCount: number|undefined = $state()
 
-    let socket = new WebSocket(`wss://${location.host}/@warpgate/admin/api/sessions/changes`)
-    let sessionChanges$ = fromEvent(socket, 'message')
-    onDestroy(() => socket.close())
+    function createSessionChangesStream (): Observable<Event> {
+        return new Observable<Event>(subscriber => {
+            let socket: WebSocket|undefined
+            let reconnectTimer: number|undefined
+            let stopped = false
+
+            const connect = () => {
+                if (stopped) {
+                    return
+                }
+
+                const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
+                const currentSocket = new WebSocket(`${scheme}://${location.host}/@warpgate/admin/api/sessions/changes`)
+                socket = currentSocket
+                currentSocket.addEventListener('open', event => subscriber.next(event))
+                currentSocket.addEventListener('message', event => subscriber.next(event))
+                currentSocket.addEventListener('error', () => currentSocket.close())
+                currentSocket.addEventListener('close', () => {
+                    if (socket === currentSocket) {
+                        socket = undefined
+                    }
+                    if (!stopped) {
+                        reconnectTimer = window.setTimeout(connect, 1000)
+                    }
+                })
+            }
+
+            connect()
+
+            return () => {
+                stopped = true
+                if (reconnectTimer !== undefined) {
+                    window.clearTimeout(reconnectTimer)
+                }
+                socket?.close()
+            }
+        })
+    }
+
+    let sessionChanges$ = createSessionChangesStream().pipe(share())
 
     function loadSessions (opt: LoadOptions): Observable<PaginatedResponse<SessionSnapshot>> {
         if (!$adminPermissions.sessionsView) {
@@ -35,16 +72,19 @@
             showLoggedInOnly$,
             merge(timer(0, 60000), sessionChanges$),
         ]).pipe(switchMap(([activeOnly, loggedInOnly]) => {
-            api.getSessions({
-                activeOnly: true,
-                limit: 1,
-            }).then(response => {
-                activeSessionCount = response.total
-            })
-            return from(api.getSessions({
-                activeOnly,
-                loggedInOnly,
-                ...opt,
+            return from(Promise.all([
+                api.getSessions({
+                    activeOnly: true,
+                    limit: 1,
+                }),
+                api.getSessions({
+                    activeOnly,
+                    loggedInOnly,
+                    ...opt,
+                }),
+            ])).pipe(map(([activeSessions, sessions]) => {
+                activeSessionCount = activeSessions.total
+                return sessions
             }))
         }))
     }

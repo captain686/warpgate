@@ -252,7 +252,7 @@ impl russh::server::Handler for ServerHandler {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         let channel = ServerChannelId(channel);
-        let data = Bytes::from(data.to_vec());
+        let data = Bytes::copy_from_slice(data);
 
         let (tx, rx) = oneshot::channel();
 
@@ -270,7 +270,7 @@ impl russh::server::Handler for ServerHandler {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         let channel = ServerChannelId(channel);
-        let data = Bytes::from(data.to_vec());
+        let data = Bytes::copy_from_slice(data);
         let (tx, rx) = oneshot::channel();
 
         self.send_event(ServerHandlerEvent::ExtendedData(channel, data, code, tx))?;
@@ -354,7 +354,7 @@ impl russh::server::Handler for ServerHandler {
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        let data = Bytes::from(data.to_vec());
+        let data = Bytes::copy_from_slice(data);
         let (tx, rx) = oneshot::channel();
         self.send_event(ServerHandlerEvent::ExecRequest(
             ServerChannelId(channel),

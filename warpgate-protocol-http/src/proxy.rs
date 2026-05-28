@@ -1,6 +1,7 @@
 use std::fmt::Write;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use cookie::Cookie;
@@ -27,10 +28,14 @@ use warpgate_tls::{TlsMode, configure_tls_connector};
 use warpgate_web::lookup_built_file;
 
 use crate::common::SessionExt;
+use crate::error::HttpBoundaryError;
 
 static X_WARPGATE_USERNAME: HeaderName = HeaderName::from_static("x-warpgate-username");
 static X_WARPGATE_AUTHENTICATION_TYPE: HeaderName =
     HeaderName::from_static("x-warpgate-authentication-type");
+const HTTP_TARGET_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const HTTP_TARGET_READ_TIMEOUT: Duration = Duration::from_secs(60);
+const HTTP_TARGET_WEBSOCKET_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 trait SomeResponse {
     fn status(&self) -> http::StatusCode;
@@ -108,19 +113,39 @@ fn construct_uri(req: &Request, options: &TargetHTTPOptions, websocket: bool) ->
     };
     uri = uri.scheme(scheme.clone());
 
-    #[allow(clippy::unwrap_used)]
     if websocket {
-        uri = uri.scheme(
-            Scheme::from_str(if scheme == &Scheme::from_str("http").unwrap() {
-                "ws"
-            } else {
-                "wss"
-            })
-            .unwrap(),
-        );
+        uri = uri.scheme(Scheme::from_str(if scheme == &Scheme::HTTP {
+            "ws"
+        } else {
+            "wss"
+        })?);
     }
 
     Ok(uri.build()?)
+}
+
+fn target_log_label(uri: &Uri) -> String {
+    match (uri.scheme_str(), uri.authority()) {
+        (Some(scheme), Some(authority)) => format!("{scheme}://{authority}"),
+        (Some(scheme), None) => scheme.to_string(),
+        (None, Some(authority)) => authority.to_string(),
+        (None, None) => "<unknown-target>".to_string(),
+    }
+}
+
+fn configured_target_label(options: &TargetHTTPOptions) -> String {
+    let Ok(mut url) = Url::parse(&options.url) else {
+        return "<invalid-target-url>".to_string();
+    };
+
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+
+    match (url.scheme(), url.host_str(), url.port()) {
+        (scheme, Some(host), Some(port)) => format!("{scheme}://{host}:{port}"),
+        (scheme, Some(host), None) => format!("{scheme}://{host}"),
+        (scheme, None, _) => scheme.to_string(),
+    }
 }
 
 fn copy_client_response<R: SomeResponse>(
@@ -246,14 +271,31 @@ pub async fn proxy_normal_request(
     body: Body,
     options: &TargetHTTPOptions,
 ) -> poem::Result<Response> {
-    let uri = construct_uri(req, options, false)?;
+    let uri = construct_uri(req, options, false).map_err(|source| {
+        HttpBoundaryError::InvalidTargetUri {
+            target: configured_target_label(options),
+            source,
+        }
+        .into_public_poem_error()
+    })?;
 
-    tracing::debug!("URI: {:?}", uri);
+    let (authorization_header, uri) = extract_basic_auth(uri).map_err(|source| {
+        HttpBoundaryError::InvalidTargetUri {
+            target: configured_target_label(options),
+            source,
+        }
+        .into_public_poem_error()
+    })?;
+    let target = target_log_label(&uri);
+
+    tracing::debug!(%target, "Proxying HTTP request");
 
     let mut client = reqwest::Client::builder()
         .gzip(true)
         .redirect(reqwest::redirect::Policy::none())
-        .connection_verbose(true);
+        .connection_verbose(true)
+        .connect_timeout(HTTP_TARGET_CONNECT_TIMEOUT)
+        .read_timeout(HTTP_TARGET_READ_TIMEOUT);
 
     if options.tls.mode == TlsMode::Required {
         client = client.https_only(true);
@@ -279,9 +321,13 @@ pub async fn proxy_normal_request(
         client = client.danger_accept_invalid_certs(true);
     }
 
-    let client = client.build().context("Could not build request")?;
-
-    let (authorization_header, uri) = extract_basic_auth(uri)?;
+    let client = client.build().map_err(|source| {
+        HttpBoundaryError::Internal {
+            phase: "build HTTP client",
+            source: source.into(),
+        }
+        .into_public_poem_error()
+    })?;
 
     let mut client_request = client.request(req.method().into(), uri.to_string());
 
@@ -295,11 +341,29 @@ pub async fn proxy_normal_request(
 
     client_request = client_request.body(reqwest::Body::wrap_stream(body.into_bytes_stream()));
 
-    let client_request = client_request.build().context("Could not build request")?;
-    let client_response = client
-        .execute(client_request)
-        .await
-        .map_err(|e| anyhow::anyhow!("Could not execute request: {e}"))?;
+    let client_request = client_request.build().map_err(|source| {
+        HttpBoundaryError::Internal {
+            phase: "build HTTP request",
+            source: source.into(),
+        }
+        .into_public_poem_error()
+    })?;
+    let client_response = client.execute(client_request).await.map_err(|source| {
+        if source.is_timeout() {
+            HttpBoundaryError::UpstreamTimeout {
+                target: target.clone(),
+                phase: "HTTP request",
+                timeout: HTTP_TARGET_READ_TIMEOUT,
+            }
+        } else {
+            HttpBoundaryError::UpstreamFailure {
+                target: target.clone(),
+                phase: "HTTP request",
+                source: source.into(),
+            }
+        }
+        .into_public_poem_error()
+    })?;
     let status = client_response.status();
 
     let mut response: Response = "".into();
@@ -313,7 +377,16 @@ pub async fn proxy_normal_request(
             .map(|p| p.show_session_menu)
             .unwrap_or(true)
     };
-    copy_client_body(client_response, &mut response, embed_session_menu).await?;
+    copy_client_body(client_response, &mut response, embed_session_menu)
+        .await
+        .map_err(|source| {
+            HttpBoundaryError::UpstreamFailure {
+                target: target.clone(),
+                phase: "HTTP response body",
+                source,
+            }
+            .into_public_poem_error()
+        })?;
 
     log_request_result(
         req.method(),
@@ -322,7 +395,14 @@ pub async fn proxy_normal_request(
         status,
     );
 
-    rewrite_response(&mut response, options, &uri)?;
+    rewrite_response(&mut response, options, &uri).map_err(|source| {
+        HttpBoundaryError::UpstreamFailure {
+            target,
+            phase: "HTTP response rewrite",
+            source,
+        }
+        .into_public_poem_error()
+    })?;
     Ok(response)
 }
 
@@ -393,11 +473,17 @@ pub async fn proxy_websocket_request(
     ctx: &AuthenticatedRequestContext,
     options: &TargetHTTPOptions,
 ) -> poem::Result<impl IntoResponse> {
-    let uri = construct_uri(req, options, true)?;
+    let uri = construct_uri(req, options, true).map_err(|source| {
+        HttpBoundaryError::InvalidTargetUri {
+            target: configured_target_label(options),
+            source,
+        }
+        .into_public_poem_error()
+    })?;
     proxy_ws_inner(req, ws, uri.clone(), ctx, options)
         .await
         .map_err(|error| {
-            tracing::error!(?uri, ?error, "WebSocket proxy failed");
+            tracing::error!(target=%target_log_label(&uri), ?error, "WebSocket proxy failed");
             error
         })
 }
@@ -408,22 +494,19 @@ fn extract_basic_auth(uri: Uri) -> anyhow::Result<(Option<HeaderValue>, Uri)> {
         .authority()
         .ok_or(WarpgateError::NoHostInUrl)?
         .to_string();
-    let parts = uri_authority.split('@').collect::<Vec<_>>();
+    let Some((creds, host)) = uri_authority.rsplit_once('@') else {
+        return Ok((None, uri));
+    };
 
-    let host = parts.last().context("URL authority is empty")?;
+    if host.is_empty() {
+        anyhow::bail!("URL authority host is empty");
+    }
 
     let uri = {
         let mut parts = uri.into_parts();
         parts.authority = Some(Authority::from_str(host)?);
         Uri::from_parts(parts)?
     };
-
-    if parts.len() == 1 {
-        return Ok((None, uri));
-    }
-
-    #[allow(clippy::indexing_slicing)] // checked
-    let creds = parts[0];
 
     let auth_header = format!("Basic {}", BASE64.encode(creds.as_bytes()));
 
@@ -439,7 +522,15 @@ async fn proxy_ws_inner(
     ctx: &AuthenticatedRequestContext,
     options: &TargetHTTPOptions,
 ) -> poem::Result<impl IntoResponse> {
-    let (authorization_header, uri) = extract_basic_auth(uri)?;
+    let original_target = target_log_label(&uri);
+    let (authorization_header, uri) = extract_basic_auth(uri).map_err(|source| {
+        HttpBoundaryError::InvalidTargetUri {
+            target: original_target,
+            source,
+        }
+        .into_public_poem_error()
+    })?;
+    let target = target_log_label(&uri);
     let mut client_request = http::request::Builder::new()
         .uri(uri.clone())
         .header(http::header::CONNECTION, "Upgrade")
@@ -469,21 +560,51 @@ async fn proxy_ws_inner(
 
     let tls_config = configure_tls_connector(!options.tls.verify, false, None)
         .await
-        .map_err(poem::error::InternalServerError)?;
+        .map_err(|source| {
+            HttpBoundaryError::Internal {
+                phase: "build WebSocket TLS connector",
+                source: source.into(),
+            }
+            .into_public_poem_error()
+        })?;
     let connector = Connector::Rustls(Arc::new(tls_config));
 
-    let (client, client_response) = connect_async_tls_with_config(
-        client_request
-            .body(())
-            .map_err(poem::error::InternalServerError)?,
+    let websocket_handshake = connect_async_tls_with_config(
+        client_request.body(()).map_err(|source| {
+            HttpBoundaryError::Internal {
+                phase: "build WebSocket request",
+                source: source.into(),
+            }
+            .into_public_poem_error()
+        })?,
         None,
         true,
         Some(connector),
-    )
-    .await
-    .map_err(poem::error::BadGateway)?;
+    );
+    let (client, client_response) =
+        match tokio::time::timeout(HTTP_TARGET_WEBSOCKET_HANDSHAKE_TIMEOUT, websocket_handshake)
+            .await
+        {
+            Ok(Ok(result)) => result,
+            Ok(Err(source)) => {
+                return Err(HttpBoundaryError::UpstreamFailure {
+                    target,
+                    phase: "WebSocket handshake",
+                    source: source.into(),
+                }
+                .into_public_poem_error());
+            }
+            Err(_) => {
+                return Err(HttpBoundaryError::UpstreamTimeout {
+                    target,
+                    phase: "WebSocket handshake",
+                    timeout: HTTP_TARGET_WEBSOCKET_HANDSHAKE_TIMEOUT,
+                }
+                .into_public_poem_error());
+            }
+        };
 
-    tracing::info!("{:?} {:?} - WebSocket", client_response.status(), uri);
+    tracing::info!(target=%target_log_label(&uri), status=?client_response.status(), "WebSocket proxy connected");
 
     let mut response = ws
         .on_upgrade(|socket| async move {
@@ -520,6 +641,13 @@ async fn proxy_ws_inner(
         .into_response();
 
     copy_client_response(&client_response, &mut response);
-    rewrite_response(&mut response, options, &uri)?;
+    rewrite_response(&mut response, options, &uri).map_err(|source| {
+        HttpBoundaryError::UpstreamFailure {
+            target: target_log_label(&uri),
+            phase: "WebSocket response rewrite",
+            source,
+        }
+        .into_public_poem_error()
+    })?;
     Ok(response)
 }

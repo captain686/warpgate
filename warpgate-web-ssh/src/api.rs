@@ -51,55 +51,63 @@ pub async fn ws_handler(
     Ok(ws.on_upgrade(move |socket| async move {
         let (mut sink, mut stream) = socket.split();
         let mut client_closed = false;
+        let mut pending_events = Vec::with_capacity(crate::session::OUTPUT_BUFFER_CAPACITY);
 
         // drain buffered events first (in case of a reconnect)
-        for msg in session.drain_buffer().await {
+        session.drain_buffer_into(&mut pending_events).await;
+        let mut socket_failed = false;
+        for msg in pending_events.drain(..) {
             if let Ok(json) = serde_json::to_string(&msg) {
-                let _ = sink.send(Message::Text(json)).await;
+                if sink.send(Message::Text(json)).await.is_err() {
+                    socket_failed = true;
+                    break;
+                }
             }
         }
         let mut keepalive = tokio::time::interval(Duration::from_secs(30));
         keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         keepalive.tick().await; // consume the immediate first tick
 
-        loop {
-            tokio::select! {
-                _ = session.wait_buffer() => {
-                    let msgs = session.drain_buffer().await;
-                    for msg in msgs {
-                        if let Ok(json) = serde_json::to_string(&msg)
-                            && sink.send(Message::Text(json)).await.is_err() {
-                            break;
-                        }
-                    }
-                    if session.is_dead() {
-                        break;
-                    }
-                }
-
-                maybe_msg = stream.next() => {
-                    match maybe_msg {
-                        Some(Ok(Message::Text(text))) => {
-                            if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text)
-                                && let Some(reply) = handle_client_message(&session, &db, client_msg).await
-                                && let Ok(json) = serde_json::to_string(&reply)
-                                && sink.send(Message::Text(json)).await.is_err()
-                            {
-                                break;
+        if !socket_failed {
+            'socket: loop {
+                tokio::select! {
+                    _ = session.wait_buffer() => {
+                        session.drain_buffer_into(&mut pending_events).await;
+                        for msg in pending_events.drain(..) {
+                            if let Ok(json) = serde_json::to_string(&msg)
+                                && sink.send(Message::Text(json)).await.is_err() {
+                                break 'socket;
                             }
                         }
-                        Some(Ok(Message::Close(_))) => {
-                            client_closed = true;
+                        if session.is_dead() {
                             break;
                         }
-                        None => break,
-                        _ => {}
                     }
-                }
 
-                _ = keepalive.tick() => {
-                    if sink.send(Message::Ping(vec![])).await.is_err() {
-                        break;
+                    maybe_msg = stream.next() => {
+                        match maybe_msg {
+                            Some(Ok(Message::Text(text))) => {
+                                if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text)
+                                    && let Some(reply) = handle_client_message(&session, &db, client_msg).await
+                                    && let Ok(json) = serde_json::to_string(&reply)
+                                    && sink.send(Message::Text(json)).await.is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            Some(Ok(Message::Close(_))) => {
+                                client_closed = true;
+                                break;
+                            }
+                            None => break,
+                            _ => {}
+                        }
+                    }
+
+                    _ = keepalive.tick() => {
+                        if sink.send(Message::Ping(vec![])).await.is_err() {
+                            break;
+                        }
                     }
                 }
             }
@@ -112,7 +120,7 @@ pub async fn ws_handler(
 
         if client_closed {
             manager.remove_session(session_id).await;
-        } else {
+        } else if !session.is_dead() {
             session.start_disconnect_timer(manager.clone()).await;
         }
     }))
@@ -131,11 +139,19 @@ async fn handle_client_message(
         ClientMessage::OpenChannel { cols, rows } => {
             let cols = cols.unwrap_or(80);
             let rows = rows.unwrap_or(24);
-            let channel_id = session.open_shell_channel(cols, rows).await;
-            Some(ServerMessage::ChannelOpened { channel_id })
+            match session.open_shell_channel(cols, rows).await {
+                Ok(channel_id) => Some(ServerMessage::ChannelOpened { channel_id }),
+                Err(error) => Some(ServerMessage::Error {
+                    message: error.to_string(),
+                }),
+            }
         }
         ClientMessage::Input { channel_id, data } => {
-            session.send_input(channel_id, data.0).await;
+            if let Err(error) = session.send_input(channel_id, data.0).await {
+                return Some(ServerMessage::Error {
+                    message: error.to_string(),
+                });
+            }
             None
         }
         ClientMessage::Resize {
@@ -143,11 +159,19 @@ async fn handle_client_message(
             cols,
             rows,
         } => {
-            session.resize_channel(channel_id, cols, rows).await;
+            if let Err(error) = session.resize_channel(channel_id, cols, rows).await {
+                return Some(ServerMessage::Error {
+                    message: error.to_string(),
+                });
+            }
             None
         }
         ClientMessage::CloseChannel { channel_id } => {
-            session.close_channel(channel_id).await;
+            if let Err(error) = session.close_channel(channel_id).await {
+                return Some(ServerMessage::Error {
+                    message: error.to_string(),
+                });
+            }
             None
         }
         ClientMessage::AcceptHostKey => {

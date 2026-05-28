@@ -1,22 +1,26 @@
+use anyhow::Result;
+use bytes::Bytes;
 use russh::ChannelId;
 use russh::server::Handle;
 use tokio::sync::mpsc;
 
+const CHANNEL_WRITE_QUEUE_CAPACITY: usize = 1024;
+
 #[derive(Debug)]
 enum ChannelWriteOperation {
-    Data(Handle, ChannelId, Vec<u8>),
-    ExtendedData(Handle, ChannelId, u32, Vec<u8>),
+    Data(Handle, ChannelId, Bytes),
+    ExtendedData(Handle, ChannelId, u32, Bytes),
     Flush(tokio::sync::oneshot::Sender<()>),
 }
 
 /// Sequences data writes and runs them in background to avoid lockups
 pub struct ChannelWriter {
-    tx: mpsc::UnboundedSender<ChannelWriteOperation>,
+    tx: mpsc::Sender<ChannelWriteOperation>,
 }
 
 impl ChannelWriter {
     pub fn new() -> Self {
-        let (tx, mut rx) = mpsc::unbounded_channel::<ChannelWriteOperation>();
+        let (tx, mut rx) = mpsc::channel::<ChannelWriteOperation>(CHANNEL_WRITE_QUEUE_CAPACITY);
         tokio::spawn(async move {
             while let Some(operation) = rx.recv().await {
                 match operation {
@@ -35,25 +39,34 @@ impl ChannelWriter {
         Self { tx }
     }
 
-    pub fn write<D: Into<Vec<u8>>>(&self, handle: Handle, channel: ChannelId, data: D) {
-        let _ = self
-            .tx
-            .send(ChannelWriteOperation::Data(handle, channel, data.into()));
+    pub async fn write<D: Into<Bytes>>(
+        &self,
+        handle: Handle,
+        channel: ChannelId,
+        data: D,
+    ) -> Result<()> {
+        self.tx
+            .send(ChannelWriteOperation::Data(handle, channel, data.into()))
+            .await
+            .map_err(|_| anyhow::anyhow!("ChannelWriter task has stopped"))
     }
 
-    pub fn write_extended<D: Into<Vec<u8>>>(
+    pub async fn write_extended<D: Into<Bytes>>(
         &self,
         handle: Handle,
         channel: ChannelId,
         ext: u32,
         data: D,
-    ) {
-        let _ = self.tx.send(ChannelWriteOperation::ExtendedData(
-            handle,
-            channel,
-            ext,
-            data.into(),
-        ));
+    ) -> Result<()> {
+        self.tx
+            .send(ChannelWriteOperation::ExtendedData(
+                handle,
+                channel,
+                ext,
+                data.into(),
+            ))
+            .await
+            .map_err(|_| anyhow::anyhow!("ChannelWriter task has stopped"))
     }
 
     /// Flush all pending writes. Returns when all previously queued operations have completed.
@@ -61,6 +74,7 @@ impl ChannelWriter {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.tx
             .send(ChannelWriteOperation::Flush(tx))
+            .await
             .map_err(|_| "ChannelWriter task has stopped")?;
         rx.await.map_err(|_| "ChannelWriter flush failed")?;
         Ok(())
