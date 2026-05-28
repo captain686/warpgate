@@ -1,11 +1,11 @@
 @import "bootstrap/scss/functions";
 
-$body-bg: #fffcf6;
-$body-color: #555;
+$body-bg: #f7f8fb;
+$body-color: #28313d;
 $font-family-sans-serif: "Work Sans", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
 $link-color: $body-color;
 $list-group-bg: transparent;
-$list-group-active-bg: rgba(#000, .125);
+$list-group-active-bg: rgba(#0d2238, .08);
 $list-group-active-color: $body-color;
 
 $blue:    #3573ac !default;
@@ -19,7 +19,7 @@ $teal:    #20c997 !default;
 $cyan:    #0e6b7e !default;
 
 // $primary: $blue;
-$secondary: #506579;
+$secondary: #5c6674;
 
 $btn-disabled-color: #969696;
 

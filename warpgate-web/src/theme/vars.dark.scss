@@ -1,7 +1,7 @@
 @import "bootstrap/scss/functions";
 
-$body-bg: #14141a;
-$body-color: #c1c9e4;
+$body-bg: #15171c;
+$body-color: #d6dbe6;
 
 $font-family-sans-serif: "Work Sans", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
 $link-color: $body-color;
@@ -25,10 +25,10 @@ $info: $blue;
 
 $component-active-bg: $primary;
 
-$input-bg: #1c1c24;
+$input-bg: #1d2027;
 $input-border-color: #ced4da40;
 $input-color: #ccc;
-$input-focus-bg: #1b1b22;
+$input-focus-bg: #20242c;
 $input-focus-border-color: tint-color($component-active-bg, 25%) ;
 $input-disabled-bg: $input-bg;
 

@@ -70,13 +70,14 @@
         display: flex;
         width: 100%;
         text-decoration: none;
-        padding: 0.8rem 1.5rem 1rem;
+        padding: .65rem .875rem;
         border-radius: var(--bs-border-radius);
         align-items: center;
-        gap: 1rem;
+        gap: .75rem;
 
         .text {
             flex-grow: 1;
+            min-width: 0;
         }
 
         &:hover, &.active {
@@ -94,33 +95,40 @@
         }
 
         .title {
-            margin-bottom: 0.25rem;
-            font-size: 1.25rem;
-
-            text-decoration: underline;
-            text-decoration-color: var(--wg-link-underline-color);
-            text-underline-offset: 2px;
+            margin-bottom: .15rem;
+            font-size: 1rem;
+            font-weight: 600;
+            line-height: 1.25;
+            text-decoration: none;
         }
 
-        &.link:hover .title {
-            text-decoration-color: var(--wg-link-hover-underline-color);
+        .icon {
+            flex: 0 0 auto;
+            color: var(--bs-secondary-color);
+            font-size: .85rem;
+            opacity: .75;
+        }
+
+        &.link:hover .icon,
+        &.active .icon {
+            opacity: 1;
         }
 
         .description {
             text-decoration: none;
-            line-height: 1rem;
-            font-size: 0.9rem;
+            line-height: 1.25;
+            font-size: .85rem;
         }
 
         &.sm {
-            padding: 0.5rem 1rem;
+            padding: .45rem .7rem;
 
             .title {
-                font-size: 1rem;
+                font-size: .95rem;
             }
 
             .description {
-                font-size: 0.8rem;
+                font-size: .8rem;
             }
 
             .icon {

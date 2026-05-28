@@ -9,7 +9,22 @@ $pagination-focus-bg: transparent;
 $modal-header-border-color: transparent;
 $dropdown-link-hover-bg: transparent;
 
-$btn-padding-x: 1.5rem;
+$border-radius: .375rem;
+$border-radius-sm: .25rem;
+$border-radius-lg: .5rem;
+
+$input-btn-padding-y: .425rem;
+$input-btn-padding-x: .75rem;
+$input-btn-font-size: .95rem;
+
+$btn-padding-y: .425rem;
+$btn-padding-x: 1rem;
+$btn-font-size: .95rem;
+$btn-border-radius: $border-radius;
+
+$list-group-item-padding-y: .625rem;
+$list-group-item-padding-x: .875rem;
+$list-group-border-radius: $border-radius;
 
 $btn-bg-shade-amount: 75%;
 $btn-bg-tint-amount: 60%;

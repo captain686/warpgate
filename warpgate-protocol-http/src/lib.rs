@@ -205,11 +205,6 @@ impl ProtocolServer for HTTPProtocolServer {
                 )
                 .at("/admin", redirect_admin_home)
                 .at(
-                    "/gateway",
-                    EmbeddedFileEndpoint::<Assets>::new("src/gateway/index.html")
-                        .with(cache_bust()),
-                )
-                .at(
                     "/api/auth/web-auth-requests/stream",
                     endpoint_auth(api::auth::api_get_web_auth_requests_stream),
                 )
@@ -219,8 +214,7 @@ impl ProtocolServer for HTTPProtocolServer {
                 )
                 .at(
                     "",
-                    page_auth(EmbeddedFileEndpoint::<Assets>::new("src/admin/index.html"))
-                        .with(cache_bust()),
+                    EmbeddedFileEndpoint::<Assets>::new("src/admin/index.html").with(cache_bust()),
                 )
                 .around({
                     let services = services;

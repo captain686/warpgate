@@ -32,12 +32,11 @@
     }: Props = $props()
 
     function resolvedBrandHref (): string {
-        return brandHref ?? (routePrefix ? `/@warpgate#${routePrefix}` : '/@warpgate/gateway')
+        return brandHref ?? `/@warpgate#${routePrefix || '/gateway'}`
     }
 
     function resolvedProfileHref (): string {
-        return profileHref
-            ?? (routePrefix ? `/@warpgate#${routePrefix}/profile` : '/@warpgate/gateway#/profile')
+        return profileHref ?? `/@warpgate#${routePrefix || '/gateway'}/profile`
     }
 
     setContext('warpgate.profileHref', resolvedProfileHref)
@@ -147,14 +146,14 @@
             <DelayedSpinner />
         {:else}
             {#if !embedded}
-            <div class="d-flex align-items-center mt-5 mb-5">
+            <div class="gateway-header">
                 <a class="logo" href={resolvedBrandHref()}>
                     <Brand />
                 </a>
 
                 <div class="ms-auto d-flex align-items-center">
                     {#if !hideAdminButton && $hasAdminAccess}
-                    <a href="/@warpgate" class="btn btn-warning btn-sm d-flex align-items-center gap-1 me-3">
+                    <a href="/@warpgate" class="btn btn-warning btn-sm d-flex align-items-center gap-1 me-2">
                         <Fa icon={faCog} class="mx-1" />
                         <span class="me-1">Admin</span>
                     </a>
@@ -196,7 +195,7 @@
             </main>
 
             {#if !embedded}
-            <footer class="mt-5">
+            <footer>
                 {#if $serverInfo?.version}
                 <span class="ms-3 me-auto">
                     {$serverInfo.version}
@@ -213,13 +212,28 @@
 
 <style lang="scss">
     .gateway-app.standalone {
-        width: 600px;
-        max-width: 100vw;
+        width: min(720px, calc(100vw - 2rem));
+        max-width: 100%;
         margin-left: auto;
         margin-right: auto;
     }
 
     .gateway-app.embedded {
         width: 100%;
+    }
+
+    .gateway-header {
+        display: flex;
+        align-items: center;
+        min-height: 52px;
+        margin: 0 0 1rem;
+        border-bottom: 1px solid rgba(var(--bs-body-color-rgb), .2);
+    }
+
+    .logo {
+        display: flex;
+        align-items: center;
+        flex: 0 0 auto;
+        padding-right: 1rem;
     }
 </style>

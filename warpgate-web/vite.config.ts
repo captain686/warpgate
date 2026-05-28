@@ -25,7 +25,6 @@ export default defineConfig({
         rollupOptions: {
             input: {
                 admin: 'src/admin/index.html',
-                gateway: 'src/gateway/index.html',
                 embed: 'src/embed/index.ts',
             },
         },

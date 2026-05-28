@@ -65,7 +65,7 @@ async function openWebSsh (target: TargetSnapshot) {
         const { sessionId } = await api.createWebSshSession({
             createWebSshSessionBody: { targetId: target.id },
         })
-        const terminalUrl = `/@warpgate/gateway#/web-ssh/${sessionId}`
+        const terminalUrl = `/@warpgate#/gateway/web-ssh/${sessionId}`
         if (terminalWindow) {
             terminalWindow.location.href = terminalUrl
             terminalWindow.focus()

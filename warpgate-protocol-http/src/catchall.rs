@@ -23,7 +23,7 @@ struct QueryParams {
 }
 
 pub fn target_select_redirect() -> Response {
-    Redirect::temporary("/@warpgate/gateway").into_response()
+    Redirect::temporary("/@warpgate#/gateway").into_response()
 }
 
 #[handler]

@@ -76,28 +76,40 @@ $font-family-os: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
 
 #app {
     display: block;
+    font-size: .95rem;
+    line-height: 1.45;
     -webkit-font-smoothing: antialiased;
 }
 
 .page-summary-bar {
     display: flex;
     align-items: center;
-    margin: 0.25rem 0 1.5rem;
-    gap: 1rem;
+    margin: .25rem 0 1rem;
+    gap: .75rem;
+    min-height: 2.5rem;
 
     h1 {
-        font-family: 'Poppins';
-        font-weight: 700;
-        font-size: 2.5rem;
+        font-family: $font-family-sans-serif;
+        font-weight: 650;
+        font-size: 1.45rem;
+        line-height: 1.2;
         margin: 0;
+    }
+
+    .text-muted {
+        margin-top: .15rem;
+        font-size: .9rem;
     }
 
     .counter {
         display: inline-block;
-        padding: 0px 10px;
+        padding: 1px 8px;
         background: var(--bs-body-color);
         color: var(--bs-body-bg);
-        border-radius: 5px;
+        border-radius: 4px;
+        font-size: .78rem;
+        font-weight: 600;
+        line-height: 1.5;
     }
 }
 
@@ -116,7 +128,7 @@ footer {
     display: flex;
     align-items: center;
     padding: .5rem 0;
-    margin: 2rem 0 1rem;
+    margin: 1.5rem 0 .75rem;
     border-top: 1px solid rgba($body-color, .2);
 }
 
@@ -134,11 +146,25 @@ input:-webkit-autofill:focus {
 
 .badge {
     font-family: $font-family-os;
+    letter-spacing: 0;
 }
 
 .btn {
+    font-weight: 500;
+    text-decoration: none;
+
+    &:hover, &:focus-visible {
+        text-decoration: none;
+    }
+}
+
+.btn-link {
     text-decoration: underline;
-    text-decoration-color: var(--#{$prefix}btn-active-bg);
+    text-decoration-color: var(--wg-link-underline-color);
+
+    &:hover, &:focus-visible {
+        text-decoration-color: var(--wg-link-hover-underline-color);
+    }
 }
 
 .page-item.active .page-link {
@@ -192,6 +218,48 @@ body {
 
     --wg-link-underline-color: #{$link-underline-color};
     --wg-link-hover-underline-color: #{$link-hover-underline-color};
+}
+
+.form-control,
+.form-select {
+    min-height: 2.25rem;
+}
+
+.input-group-text {
+    min-height: 2.25rem;
+}
+
+.list-group {
+    --bs-list-group-item-padding-x: .875rem;
+    --bs-list-group-item-padding-y: .625rem;
+}
+
+.list-group-flush {
+    border-top: var(--bs-list-group-border-width) solid var(--bs-list-group-border-color);
+    border-bottom: var(--bs-list-group-border-width) solid var(--bs-list-group-border-color);
+}
+
+.list-group-item {
+    transition: background-color .12s ease-out, border-color .12s ease-out, color .12s ease-out;
+}
+
+.list-group-item-action:hover,
+.list-group-item-action:focus {
+    background-color: var(--bs-list-group-action-hover-bg);
+}
+
+.table {
+    --bs-table-bg: transparent;
+    font-size: .92rem;
+
+    > :not(caption) > * > * {
+        padding: .55rem .65rem;
+    }
+
+    thead th {
+        color: var(--#{$prefix}secondary-color);
+        font-weight: 650;
+    }
 }
 
 @each $theme-color, $value in $theme-colors {
@@ -287,12 +355,11 @@ ul.pagination {
     background: var(--bs-body-bg);
 
     .nav-link {
-        text-decoration: underline;
+        text-decoration: none;
         text-decoration-color: var(--#{$prefix}secondary-color);
-
         background: var(--#{$prefix}btn-bg);
         color: var(--#{$prefix}btn-color);
-
+        font-weight: 500;
 
         &:active, &.active {
             background: var(--bs-list-group-action-active-bg);

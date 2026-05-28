@@ -109,10 +109,10 @@
 {#await $items}
     <DelayedSpinner />
 {:then _items}
-    <div class="d-flex mb-2" hidden={!loaded}>
+    <div class="list-toolbar d-flex mb-2" hidden={!loaded}>
         <!-- either filtering or not filtering and there are at least some items at all -->
         {#if showSearch && (filter || !!_items?.length)}
-            <Input bind:value={filter} placeholder="Search..." class="flex-grow-1 border-0" />
+            <Input bind:value={filter} placeholder="Search..." class="list-search flex-grow-1" />
         {/if}
         {@render header?.()}
     </div>
@@ -148,6 +148,17 @@
 {/await}
 
 <style lang="scss">
+    .list-toolbar {
+        align-items: center;
+        gap: .5rem;
+        min-height: 2.25rem;
+    }
+
+    :global(.list-search.form-control) {
+        background: var(--bs-body-bg);
+        border-color: var(--bs-border-color);
+    }
+
     .list-group:empty {
         display: none;
     }
