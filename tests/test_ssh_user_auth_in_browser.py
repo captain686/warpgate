@@ -10,7 +10,7 @@ from .util import wait_port
 
 class Test:
     # When include_pk is False, we're testing for
-    # https://github.com/warp-tech/warpgate/issues/972
+    # https://github.com/captain686/warpgate/issues/972
     # where the SSH server fails to offer keyboard-interactive authentication
     # when no OTP credential is present.
     @pytest.mark.parametrize("include_pk", [True, False])

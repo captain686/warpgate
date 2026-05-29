@@ -357,7 +357,7 @@ impl ServerSession {
     /// session but maybe with some port forwards or agent)
     /// Ideally, it needs to be called by the time we already have the interactive
     /// channel open if we will ever have one to prevent bugs like
-    /// https://github.com/warp-tech/warpgate/issues/1286
+    /// https://github.com/captain686/warpgate/issues/1286
     /// where a PTY channel is required for the host key prompt, but we've connected
     /// faster than the client could open one.
     pub async fn maybe_connect_remote(&mut self) -> Result<()> {

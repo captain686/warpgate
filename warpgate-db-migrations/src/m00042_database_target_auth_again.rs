@@ -1,7 +1,7 @@
 use sea_orm_migration::prelude::*;
 
 /// Just rerun m00037 since now some entries could be malformed again
-/// due to https://github.com/warp-tech/warpgate/issues/1883
+/// due to https://github.com/captain686/warpgate/issues/1883
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 

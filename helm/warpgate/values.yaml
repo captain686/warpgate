@@ -3,7 +3,7 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/warp-tech/warpgate
+  repository: ghcr.io/captain686/warpgate
   pullPolicy: IfNotPresent
   tag: "0.23.4"
 

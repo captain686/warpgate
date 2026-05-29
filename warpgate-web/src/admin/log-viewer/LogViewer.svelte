@@ -28,7 +28,7 @@ interface Props {
 
 let { filters }: Props = $props()
 
-/** Cap in-memory log rows (see github.com/warp-tech/warpgate/issues/1836). */
+/** Cap in-memory log rows (see github.com/captain686/warpgate/issues/1836). */
 const MAX_LOGS = 500
 const POLL_INTERVAL_MS = 3000
 const PAGE_SIZE = 500

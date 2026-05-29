@@ -45,7 +45,7 @@ impl MigrationTrait for Migration {
 
         let connection = manager.get_connection();
         if connection.get_database_backend() == DbBackend::MySql {
-            // https://github.com/warp-tech/warpgate/issues/857
+            // https://github.com/captain686/warpgate/issues/857
             connection
                 .execute_unprepared(
                     "ALTER TABLE `tickets` MODIFY COLUMN `expiry` TIMESTAMP NULL DEFAULT NULL",
