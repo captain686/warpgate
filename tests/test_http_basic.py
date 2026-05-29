@@ -51,7 +51,7 @@ class Test:
         print(unquote(redirect))
         assert (
             unquote(redirect)
-            == f"/@warpgate#/login?next=/?warpgate-target={target.name}"
+            == f"/@warpgate#/gateway/login?next=/?warpgate-target={target.name}"
         )
 
         response = session.get(f"{url}/@warpgate/api/info").json()

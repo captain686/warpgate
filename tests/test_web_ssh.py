@@ -31,8 +31,8 @@ class TestWebSsh:
         with admin_client(url) as api:
             role = api.create_role(sdk.RoleDataRequest(name=f"role-{uuid4()}"))
             user = api.create_user(sdk.CreateUserRequest(username=f"user-{uuid4()}"))
-            user_id = getattr(user, "id", user.user.id)
-            username = getattr(user, "username", user.user.username)
+            user_id = user.id
+            username = user.username
             api.create_password_credential(
                 user_id, sdk.NewPasswordCredential(password="123")
             )
@@ -154,8 +154,8 @@ class TestWebSsh:
         with admin_client(url) as api:
             role = api.create_role(sdk.RoleDataRequest(name=f"role-{uuid4()}"))
             user = api.create_user(sdk.CreateUserRequest(username=f"user-{uuid4()}"))
-            user_id = getattr(user, "id", user.user.id)
-            username = getattr(user, "username", user.user.username)
+            user_id = user.id
+            username = user.username
             api.create_password_credential(
                 user_id, sdk.NewPasswordCredential(password="123")
             )

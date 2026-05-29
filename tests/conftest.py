@@ -184,7 +184,7 @@ class ProcessManager:
                 PermitTunnel yes
                 StrictModes no
                 PermitRootLogin yes
-                AllowUsers root
+                AllowUsers root foo
                 HostKey /ssh-keys/id_ed25519
                 Subsystem	sftp	/usr/lib/ssh/sftp-server
                 LogLevel DEBUG3

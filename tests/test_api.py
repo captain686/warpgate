@@ -22,9 +22,10 @@ from .util import wait_port
 @dataclass
 class AdminApiTestCase:
     id: str
-    permission: Optional[str]
+    permission: Optional[str | tuple[str, ...]]
     call: Callable[[sdk.DefaultApi, Dict[str, object]], sdk.ApiResponse]
     expected_statuses: Set[int]
+    require_all_permissions: bool = False
 
 
 @contextlib.contextmanager
@@ -44,6 +45,7 @@ def make_limited_admin_role_payload(**overrides):
         "users_create": False,
         "users_edit": False,
         "users_delete": False,
+        "users_manage_admins": False,
         "access_roles_create": False,
         "access_roles_edit": False,
         "access_roles_delete": False,
@@ -58,6 +60,19 @@ def make_limited_admin_role_payload(**overrides):
         "ticket_requests_manage": False,
         **overrides,
     }
+
+
+def make_allowed_admin_role_payload(case: AdminApiTestCase) -> dict[str, object]:
+    if case.permission is None:
+        return make_limited_admin_role_payload()
+
+    permissions = (
+        (case.permission,) if isinstance(case.permission, str) else case.permission
+    )
+    enabled_permissions = permissions if case.require_all_permissions else permissions[:1]
+    return make_limited_admin_role_payload(
+        **{permission: True for permission in enabled_permissions}
+    )
 
 
 ADMIN_API_TEST_CASES: list[AdminApiTestCase] = [
@@ -121,7 +136,7 @@ ADMIN_API_TEST_CASES: list[AdminApiTestCase] = [
     ),
     AdminApiTestCase(
         id="get_role",
-        permission=None,
+        permission=("access_roles_create", "access_roles_edit", "access_roles_delete"),
         call=lambda api, r: api.get_role_with_http_info(r["role_id"]),
         expected_statuses={200},
     ),
@@ -136,13 +151,13 @@ ADMIN_API_TEST_CASES: list[AdminApiTestCase] = [
     ),
     AdminApiTestCase(
         id="get_role_targets",
-        permission=None,
+        permission=("access_roles_create", "access_roles_edit", "access_roles_delete"),
         call=lambda api, r: api.get_role_targets_with_http_info(r["role_id"]),
         expected_statuses={200},
     ),
     AdminApiTestCase(
         id="get_role_users",
-        permission=None,
+        permission=("access_roles_create", "access_roles_edit", "access_roles_delete"),
         call=lambda api, r: api.get_role_users_with_http_info(r["role_id"]),
         expected_statuses={200},
     ),
@@ -249,7 +264,13 @@ ADMIN_API_TEST_CASES: list[AdminApiTestCase] = [
     ),
     AdminApiTestCase(
         id="get_targets",
-        permission=None,
+        permission=(
+            "targets_create",
+            "targets_edit",
+            "targets_delete",
+            "users_edit",
+            "tickets_create",
+        ),
         call=lambda api, r: api.get_targets_with_http_info(),
         expected_statuses={200},
     ),
@@ -276,7 +297,7 @@ ADMIN_API_TEST_CASES: list[AdminApiTestCase] = [
     ),
     AdminApiTestCase(
         id="get_target",
-        permission=None,
+        permission=("targets_create", "targets_edit", "targets_delete"),
         call=lambda api, r: api.get_target_with_http_info(r["target_id"]),
         expected_statuses={200},
     ),
@@ -312,7 +333,7 @@ ADMIN_API_TEST_CASES: list[AdminApiTestCase] = [
     ),
     AdminApiTestCase(
         id="get_target_roles",
-        permission=None,
+        permission=("targets_create", "targets_edit", "targets_delete"),
         call=lambda api, r: api.get_target_roles_with_http_info(r["target_id"]),
         expected_statuses={200},
     ),
@@ -334,7 +355,7 @@ ADMIN_API_TEST_CASES: list[AdminApiTestCase] = [
     ),
     AdminApiTestCase(
         id="list_target_groups",
-        permission=None,
+        permission=("targets_create", "targets_edit", "targets_delete"),
         call=lambda api, r: api.list_target_groups_with_http_info(),
         expected_statuses={200},
     ),
@@ -348,7 +369,7 @@ ADMIN_API_TEST_CASES: list[AdminApiTestCase] = [
     ),
     AdminApiTestCase(
         id="get_target_group",
-        permission=None,
+        permission=("targets_create", "targets_edit", "targets_delete"),
         call=lambda api, r: api.get_target_group_with_http_info(r["target_group_id"]),
         expected_statuses={200},
     ),
@@ -420,7 +441,7 @@ ADMIN_API_TEST_CASES: list[AdminApiTestCase] = [
         id="add_user_role",
         permission="access_roles_assign",
         call=lambda api, r: api.add_user_role_with_http_info(
-            r["user_id"], r["role_id"]
+            r["role_assignment_user_id"], r["role_id"]
         ),
         expected_statuses={201},
     ),
@@ -428,7 +449,7 @@ ADMIN_API_TEST_CASES: list[AdminApiTestCase] = [
         id="delete_user_role",
         permission="access_roles_assign",
         call=lambda api, r: api.delete_user_role_with_http_info(
-            r["user_id"], r["role_id"]
+            r["role_assignment_user_id"], r["role_id"]
         ),
         expected_statuses={204},
     ),
@@ -440,19 +461,21 @@ ADMIN_API_TEST_CASES: list[AdminApiTestCase] = [
     ),
     AdminApiTestCase(
         id="add_user_admin_role",
-        permission="admin_roles_manage",
+        permission=("admin_roles_manage", "users_manage_admins"),
         call=lambda api, r: api.add_user_admin_role_with_http_info(
-            r["user_id"], r["admin_role_id"]
+            r["admin_role_grantee_user_id"], r["admin_role_id"]
         ),
         expected_statuses={201},
+        require_all_permissions=True,
     ),
     AdminApiTestCase(
         id="delete_user_admin_role",
-        permission="admin_roles_manage",
+        permission=("admin_roles_manage", "users_manage_admins"),
         call=lambda api, r: api.delete_user_admin_role_with_http_info(
-            r["user_id"], r["admin_role_id"]
+            r["admin_role_grantee_user_id"], r["admin_role_id"]
         ),
         expected_statuses={204},
+        require_all_permissions=True,
     ),
     AdminApiTestCase(
         id="get_password_credentials",
@@ -468,6 +491,16 @@ ADMIN_API_TEST_CASES: list[AdminApiTestCase] = [
             sdk.NewPasswordCredential(password="123"),
         ),
         expected_statuses={201},
+    ),
+    AdminApiTestCase(
+        id="update_password_credential",
+        permission="users_edit",
+        call=lambda api, r: api.update_password_credential_with_http_info(
+            r["user_id"],
+            r["password_id"],
+            sdk.NewPasswordCredential(password="456"),
+        ),
+        expected_statuses={200},
     ),
     AdminApiTestCase(
         id="delete_password_credential",
@@ -771,15 +804,15 @@ ADMIN_API_TEST_CASES: list[AdminApiTestCase] = [
         id="get_user_role",
         permission=None,
         call=lambda api, r: api.get_user_role_with_http_info(
-            r["user_id"], r["role_id"]
+            r["assigned_role_user_id"], r["role_id"]
         ),
         expected_statuses={200},
     ),
     AdminApiTestCase(
         id="update_user_role",
-        permission=None,
+        permission="access_roles_assign",
         call=lambda api, r: api.update_user_role_with_http_info(
-            r["user_id"],
+            r["assigned_role_user_id"],
             r["role_id"],
             sdk.UpdateUserRoleRequest(
                 expires_at=(datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
@@ -920,6 +953,19 @@ def test_all_openapi_admin_operations_permission_enforcement(
     user = admin_client.create_user(sdk.CreateUserRequest(username=f"user-{uuid4()}"))
     resources["user_id"] = user.id
     resources["username"] = user.username
+    role_assignment_user = admin_client.create_user(
+        sdk.CreateUserRequest(username=f"user-role-{uuid4()}")
+    )
+    resources["role_assignment_user_id"] = role_assignment_user.id
+    assigned_role_user = admin_client.create_user(
+        sdk.CreateUserRequest(username=f"user-assigned-role-{uuid4()}")
+    )
+    resources["assigned_role_user_id"] = assigned_role_user.id
+    admin_client.add_user_role(assigned_role_user.id, resources["role_id"])
+    admin_role_grantee_user = admin_client.create_user(
+        sdk.CreateUserRequest(username=f"user-admin-role-{uuid4()}")
+    )
+    resources["admin_role_grantee_user_id"] = admin_role_grantee_user.id
 
     # fake IDs here
     resources["session_id"] = str(uuid4())
@@ -1005,9 +1051,7 @@ def test_all_openapi_admin_operations_permission_enforcement(
     for case in ADMIN_API_TEST_CASES:
         print(f"Testing {case.id} with permission {case.permission}")
         # Positive case: role has required permission (or any admin if None).
-        allow_payload = make_limited_admin_role_payload(
-            **({case.permission: True} if case.permission else {})
-        )
+        allow_payload = make_allowed_admin_role_payload(case)
         allowed_role = _create_admin_role(admin_client, allow_payload)
         allowed_user = _create_user_with_role(admin_client, allowed_role.id)
         token = _create_user_api_token(url, allowed_user.username, "123")
@@ -1026,10 +1070,7 @@ def test_all_openapi_admin_operations_permission_enforcement(
             if case.permission:
                 denied_role = _create_admin_role(
                     admin_client,
-                    {
-                        k: not v if isinstance(v, bool) else v
-                        for k, v in allow_payload.items()
-                    },
+                    make_limited_admin_role_payload(),
                 )
                 denied_user = _create_user_with_role(admin_client, denied_role.id)
             else:
@@ -1049,4 +1090,3 @@ def test_all_openapi_admin_operations_permission_enforcement(
                 assert status in {401, 403}, (
                     f"{case.id} should be forbidden without {case.permission}, got {status}: {body}"
                 )
-

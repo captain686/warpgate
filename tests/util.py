@@ -12,7 +12,7 @@ import typing
 import paramiko
 
 
-last_port = 1234
+allocated_ports = set()
 
 mysql_client_ssl_opt = "--ssl"
 mysql_client_opts = []
@@ -23,17 +23,33 @@ if "GITHUB_ACTION" in os.environ:
 
 
 def alloc_port():
-    global last_port
-    last_port += 1
-    return last_port
+    while True:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            port = sock.getsockname()[1]
+        if port in allocated_ports:
+            continue
+        allocated_ports.add(port)
+        return port
 
 
 def _wait_timeout(fn, msg, timeout=60):
-    t = threading.Thread(target=fn, daemon=True)
+    error: list[BaseException] = []
+
+    def runner():
+        try:
+            fn()
+        except BaseException as exc:  # noqa: BLE001
+            error.append(exc)
+
+    t = threading.Thread(target=runner, daemon=True)
     t.start()
     t.join(timeout=timeout)
     if t.is_alive():
         raise Exception(msg)
+    if error:
+        raise error[0]
 
 
 def wait_port(port, recv=True, timeout=60, for_process: subprocess.Popen = None, connect_timeout=5, read_timeout=5):
@@ -46,7 +62,7 @@ def wait_port(port, recv=True, timeout=60, for_process: subprocess.Popen = None,
                 if recv:
                     s.settimeout(read_timeout)
                     if not s.recv(100):
-                        raise Exception("Port is open but not responding")
+                        raise OSError("Port is open but not responding")
                 s.close()
                 logging.debug(f"Port {port} is up")
                 return
@@ -54,7 +70,7 @@ def wait_port(port, recv=True, timeout=60, for_process: subprocess.Popen = None,
                 if for_process:
                     try:
                         for_process.wait(timeout=0.1)
-                        raise Exception("Process exited while waiting for port")
+                        raise RuntimeError("Process exited while waiting for port")
                     except subprocess.TimeoutExpired:
                         continue
                 else:
@@ -69,21 +85,17 @@ def wait_mysql_port(port):
     def wait():
         while True:
             try:
-                subprocess.check_call(
-                    f'mysql --user=root --password=123 --host=127.0.0.1 --port={port} --execute="show schemas;"',
-                    shell=True,
-                )
+                with socket.create_connection(("localhost", port), timeout=5) as conn:
+                    conn.settimeout(5)
+                    if not conn.recv(64):
+                        raise OSError("MySQL port is open but not responding")
                 logging.debug(f"Port {port} is up")
                 break
-            except subprocess.CalledProcessError:
+            except OSError:
                 time.sleep(1)
                 continue
 
-    t = threading.Thread(target=wait, daemon=True)
-    t.start()
-    t.join(timeout=60)
-    if t.is_alive():
-        raise Exception(f"Port {port} is not up")
+    _wait_timeout(wait, f"Port {port} is not up", timeout=60)
 
 
 def create_ticket(url, username, target_name):
