@@ -13,7 +13,9 @@ use warpgate_common_http::AuthenticatedRequestContext;
 use warpgate_db_entities::{Role, Target, TargetRoleAssignment, User, UserRoleAssignment};
 
 use super::AnySecurityScheme;
-use crate::api::common::{case_insensitive_search, require_admin_permission};
+use crate::api::common::{
+    case_insensitive_search, require_admin_permission, require_any_admin_permission,
+};
 
 #[derive(Object)]
 struct RoleDataRequest {
@@ -75,6 +77,10 @@ impl ListApi {
         use warpgate_db_entities::Role;
 
         require_admin_permission(&ctx, Some(AdminPermission::AccessRolesCreate)).await?;
+
+        if body.is_default.unwrap_or(false) {
+            require_admin_permission(&ctx, Some(AdminPermission::AccessRolesAssign)).await?;
+        }
 
         if body.name.is_empty() {
             return Ok(CreateRoleResponse::BadRequest(Json("name".into())));
@@ -146,7 +152,15 @@ impl DetailApi {
         id: Path<Uuid>,
         _sec_scheme: AnySecurityScheme,
     ) -> Result<GetRoleResponse, WarpgateError> {
-        require_admin_permission(&ctx, None).await?;
+        require_any_admin_permission(
+            &ctx,
+            &[
+                AdminPermission::AccessRolesCreate,
+                AdminPermission::AccessRolesEdit,
+                AdminPermission::AccessRolesDelete,
+            ],
+        )
+        .await?;
 
         let db = ctx.services().db.lock().await;
 
@@ -175,6 +189,11 @@ impl DetailApi {
         };
 
         let current_is_default = role.is_default;
+
+        if body.is_default.is_some_and(|is_default| is_default != current_is_default) {
+            require_admin_permission(&ctx, Some(AdminPermission::AccessRolesAssign)).await?;
+        }
+
         let mut model: Role::ActiveModel = role.into();
         model.name = Set(body.name.clone());
         model.description = Set(body.description.clone().unwrap_or_default());
@@ -225,7 +244,15 @@ impl DetailApi {
         id: Path<Uuid>,
         _sec_scheme: AnySecurityScheme,
     ) -> Result<GetRoleTargetsResponse, WarpgateError> {
-        require_admin_permission(&ctx, None).await?;
+        require_any_admin_permission(
+            &ctx,
+            &[
+                AdminPermission::AccessRolesCreate,
+                AdminPermission::AccessRolesEdit,
+                AdminPermission::AccessRolesDelete,
+            ],
+        )
+        .await?;
 
         let db = ctx.services().db.lock().await;
 
@@ -254,7 +281,15 @@ impl DetailApi {
         id: Path<Uuid>,
         _sec_scheme: AnySecurityScheme,
     ) -> Result<GetRoleUsersResponse, WarpgateError> {
-        require_admin_permission(&ctx, None).await?;
+        require_any_admin_permission(
+            &ctx,
+            &[
+                AdminPermission::AccessRolesCreate,
+                AdminPermission::AccessRolesEdit,
+                AdminPermission::AccessRolesDelete,
+            ],
+        )
+        .await?;
 
         let db = ctx.services().db.lock().await;
 

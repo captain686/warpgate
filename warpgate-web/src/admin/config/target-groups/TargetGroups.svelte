@@ -7,6 +7,13 @@
     import GroupColorCircle from 'common/GroupColorCircle.svelte'
     import { compare as naturalCompareFactory } from 'natural-orderby'
     import { adminPermissions } from 'admin/lib/store'
+    import Alert from 'common/sveltestrap-s5-ports/Alert.svelte'
+
+    function canManageTargets(): boolean {
+        return $adminPermissions.targetsCreate
+            || $adminPermissions.targetsEdit
+            || $adminPermissions.targetsDelete
+    }
 
     function getTargetGroups(): Observable<PaginatedResponse<TargetGroup>> {
         return from(api.listTargetGroups()).pipe(
@@ -29,43 +36,49 @@
 </script>
 
 <div class="container-max-md">
-    <div class="page-summary-bar">
-        <h1>target groups</h1>
-        <a
-            class="btn btn-primary ms-auto"
-            href="/config/target-groups/create"
-            class:disabled={!$adminPermissions.targetsCreate}
-            use:link>
-            Add a group
-        </a>
-    </div>
-
-    <ItemList load={getTargetGroups} showSearch={true}>
-        {#snippet empty()}
-            <EmptyState
-                title="No target groups yet"
-                hint="Target groups help organize your targets for easier management"
-            />
-        {/snippet}
-        {#snippet item(group)}
+    {#if canManageTargets()}
+        <div class="page-summary-bar">
+            <h1>target groups</h1>
             <a
-                class="list-group-item list-group-item-action"
-                href="/config/target-groups/{group.id}"
+                class="btn btn-primary ms-auto"
+                href="/config/target-groups/create"
+                class:disabled={!$adminPermissions.targetsCreate}
                 use:link>
-                <div class="me-auto">
-                    <div class="d-flex align-items-center gap-2">
-                        {#if group.color}
-                            <GroupColorCircle color={group.color} />
-                        {/if}
-                        <strong>{group.name}</strong>
-                    </div>
-                    {#if group.description}
-                        <small class="d-block text-muted">{group.description}</small>
-                    {/if}
-                </div>
+                Add a group
             </a>
-        {/snippet}
-    </ItemList>
+        </div>
+
+        <ItemList load={getTargetGroups} showSearch={true}>
+            {#snippet empty()}
+                <EmptyState
+                    title="No target groups yet"
+                    hint="Target groups help organize your targets for easier management"
+                />
+            {/snippet}
+            {#snippet item(group)}
+                <a
+                    class="list-group-item list-group-item-action"
+                    href="/config/target-groups/{group.id}"
+                    use:link>
+                    <div class="me-auto">
+                        <div class="d-flex align-items-center gap-2">
+                            {#if group.color}
+                                <GroupColorCircle color={group.color} />
+                            {/if}
+                            <strong>{group.name}</strong>
+                        </div>
+                        {#if group.description}
+                            <small class="d-block text-muted">{group.description}</small>
+                        {/if}
+                    </div>
+                </a>
+            {/snippet}
+        </ItemList>
+    {:else}
+        <Alert color="warning">
+            You have no permission to manage target groups.
+        </Alert>
+    {/if}
 </div>
 
 <style lang="scss">

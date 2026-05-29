@@ -5,6 +5,13 @@
     import { link } from 'svelte-spa-router'
     import { compare as naturalCompareFactory } from 'natural-orderby'
     import { adminPermissions } from '../lib/store'
+    import Alert from 'common/sveltestrap-s5-ports/Alert.svelte'
+
+    function canManageAccessRoles(): boolean {
+        return $adminPermissions.accessRolesCreate
+            || $adminPermissions.accessRolesEdit
+            || $adminPermissions.accessRolesDelete
+    }
 
     function getRoles(options: LoadOptions): Observable<PaginatedResponse<Role>> {
         return from(
@@ -31,34 +38,40 @@
 </script>
 
 <div class="container-max-md">
-    <div class="page-summary-bar">
-        <h1>roles</h1>
-        <a
-            class="btn btn-primary ms-auto"
-            href="/config/access-roles/create"
-            class:disabled={!$adminPermissions.accessRolesCreate}
-            use:link>
-            Add a role
-        </a>
-    </div>
-
-    <ItemList load={getRoles} showSearch={true}>
-        {#snippet item(role)}
+    {#if canManageAccessRoles()}
+        <div class="page-summary-bar">
+            <h1>roles</h1>
             <a
-                class="list-group-item list-group-item-action"
-                href="/config/access-roles/{role.id}"
+                class="btn btn-primary ms-auto"
+                href="/config/access-roles/create"
+                class:disabled={!$adminPermissions.accessRolesCreate}
                 use:link>
-                <div>
-                    <strong class="me-auto">
-                        {role.name}
-                    </strong>
-                    {#if role.description}
-                        <small class="d-block text-muted">{role.description}</small>
-                    {/if}
-                </div>
+                Add a role
             </a>
-        {/snippet}
-    </ItemList>
+        </div>
+
+        <ItemList load={getRoles} showSearch={true}>
+            {#snippet item(role)}
+                <a
+                    class="list-group-item list-group-item-action"
+                    href="/config/access-roles/{role.id}"
+                    use:link>
+                    <div>
+                        <strong class="me-auto">
+                            {role.name}
+                        </strong>
+                        {#if role.description}
+                            <small class="d-block text-muted">{role.description}</small>
+                        {/if}
+                    </div>
+                </a>
+            {/snippet}
+        </ItemList>
+    {:else}
+        <Alert color="warning">
+            You have no permission to manage access roles.
+        </Alert>
+    {/if}
 </div>
 
 <style lang="scss">

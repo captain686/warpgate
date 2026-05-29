@@ -19,7 +19,9 @@ use warpgate_db_entities::Target::TargetKind;
 use warpgate_db_entities::{KnownHost, Role, Target, TargetRoleAssignment, Ticket, TicketRequest};
 
 use super::AnySecurityScheme;
-use crate::api::common::{case_insensitive_search, require_admin_permission};
+use crate::api::common::{
+    case_insensitive_search, require_admin_permission, require_any_admin_permission,
+};
 
 fn dedupe_known_hosts(hosts: Vec<KnownHost::Model>) -> Vec<KnownHost::Model> {
     let mut seen = HashSet::new();
@@ -80,7 +82,17 @@ impl ListApi {
         group_id: Query<Option<Uuid>>,
         _sec_scheme: AnySecurityScheme,
     ) -> Result<GetTargetsResponse, WarpgateError> {
-        require_admin_permission(&ctx, None).await?;
+        require_any_admin_permission(
+            &ctx,
+            &[
+                AdminPermission::TargetsCreate,
+                AdminPermission::TargetsEdit,
+                AdminPermission::TargetsDelete,
+                AdminPermission::UsersEdit,
+                AdminPermission::TicketsCreate,
+            ],
+        )
+        .await?;
 
         let db = ctx.services().db.lock().await;
 
@@ -231,7 +243,15 @@ impl DetailApi {
         id: Path<Uuid>,
         _sec_scheme: AnySecurityScheme,
     ) -> Result<GetTargetResponse, WarpgateError> {
-        require_admin_permission(&ctx, None).await?;
+        require_any_admin_permission(
+            &ctx,
+            &[
+                AdminPermission::TargetsCreate,
+                AdminPermission::TargetsEdit,
+                AdminPermission::TargetsDelete,
+            ],
+        )
+        .await?;
 
         let db = ctx.services().db.lock().await;
 
@@ -439,7 +459,15 @@ impl RolesApi {
         id: Path<Uuid>,
         _sec_scheme: AnySecurityScheme,
     ) -> Result<GetTargetRolesResponse, WarpgateError> {
-        require_admin_permission(&ctx, None).await?;
+        require_any_admin_permission(
+            &ctx,
+            &[
+                AdminPermission::TargetsCreate,
+                AdminPermission::TargetsEdit,
+                AdminPermission::TargetsDelete,
+            ],
+        )
+        .await?;
 
         let db = ctx.services().db.lock().await;
 

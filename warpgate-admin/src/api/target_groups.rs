@@ -13,7 +13,7 @@ use warpgate_db_entities::TargetGroup;
 use warpgate_db_entities::TargetGroup::BootstrapThemeColor;
 
 use super::AnySecurityScheme;
-use crate::api::common::require_admin_permission;
+use crate::api::common::{require_admin_permission, require_any_admin_permission};
 
 #[derive(Object)]
 struct TargetGroupDataRequest {
@@ -54,7 +54,15 @@ impl ListApi {
         ctx: Data<&AuthenticatedRequestContext>,
         _sec_scheme: AnySecurityScheme,
     ) -> Result<GetTargetGroupsResponse, WarpgateError> {
-        require_admin_permission(&ctx, None).await?;
+        require_any_admin_permission(
+            &ctx,
+            &[
+                AdminPermission::TargetsCreate,
+                AdminPermission::TargetsEdit,
+                AdminPermission::TargetsDelete,
+            ],
+        )
+        .await?;
 
         let db = ctx.services().db.lock().await;
         let groups = TargetGroup::Entity::find()
@@ -148,7 +156,15 @@ impl DetailApi {
         id: Path<Uuid>,
         _sec_scheme: AnySecurityScheme,
     ) -> Result<GetTargetGroupResponse, WarpgateError> {
-        require_admin_permission(&ctx, None).await?;
+        require_any_admin_permission(
+            &ctx,
+            &[
+                AdminPermission::TargetsCreate,
+                AdminPermission::TargetsEdit,
+                AdminPermission::TargetsDelete,
+            ],
+        )
+        .await?;
 
         let db = ctx.services().db.lock().await;
         let group = TargetGroup::Entity::find_by_id(id.0).one(&*db).await?;

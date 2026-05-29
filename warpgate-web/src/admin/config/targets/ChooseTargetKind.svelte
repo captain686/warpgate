@@ -2,6 +2,8 @@
     import { TargetKind } from 'gateway/lib/api'
     import NavListItem from 'common/NavListItem.svelte'
     import Badge from 'common/sveltestrap-s5-ports/Badge.svelte'
+    import Alert from 'common/sveltestrap-s5-ports/Alert.svelte'
+    import { adminPermissions } from '../../lib/store'
 
     const kinds: {
         name: string,
@@ -36,26 +38,36 @@
             experimental: true,
         },
     ]
+
+    function canCreateTarget(): boolean {
+        return $adminPermissions.targetsCreate
+    }
 </script>
 
 <div class="container-max-md">
-    <div class="page-summary-bar">
-        <h1>add a target</h1>
-    </div>
+    {#if canCreateTarget()}
+        <div class="page-summary-bar">
+            <h1>add a target</h1>
+        </div>
 
-    <div class="narrow-page">
-        {#each kinds as kind (kind.value)}
-            <NavListItem
-                title={kind.name}
-                description={kind.description}
-                href={`/config/targets/create/${kind.value}`}
-            >
-                {#snippet addonSnippet()}
-                    {#if kind.experimental}
-                        <Badge color="warning">Experimental</Badge>
-                    {/if}
-                {/snippet}
-            </NavListItem>
-        {/each}
-    </div>
+        <div class="narrow-page">
+            {#each kinds as kind (kind.value)}
+                <NavListItem
+                    title={kind.name}
+                    description={kind.description}
+                    href={`/config/targets/create/${kind.value}`}
+                >
+                    {#snippet addonSnippet()}
+                        {#if kind.experimental}
+                            <Badge color="warning">Experimental</Badge>
+                        {/if}
+                    {/snippet}
+                </NavListItem>
+            {/each}
+        </div>
+    {:else}
+        <Alert color="warning">
+            You do not have permission to create targets.
+        </Alert>
+    {/if}
 </div>

@@ -770,7 +770,7 @@ impl RolesApi {
         body: Json<UpdateUserRoleRequest>,
         _sec_scheme: AnySecurityScheme,
     ) -> Result<UpdateUserRoleResponse, WarpgateError> {
-        require_admin_permission(&ctx, None).await?;
+        require_admin_permission(&ctx, Some(AdminPermission::AccessRolesAssign)).await?;
         require_manage_admin_accounts_permission(&ctx, id.0).await?;
         let db = ctx.services().db.lock().await;
 

@@ -38,6 +38,14 @@ pub enum AuditEvent {
         username: String,
         actor_user_id: Uuid,
     },
+    CredentialUpdated {
+        credential_type: String,
+        credential_name: Option<String>,
+        via: CredentialChangedVia,
+        user_id: Uuid,
+        username: String,
+        actor_user_id: Uuid,
+    },
     UserCreated {
         user_id: Uuid,
         username: String,
@@ -176,6 +184,39 @@ impl AuditEvent {
                         username = %username,
                         related_users = ?format_related_ids(&[*user_id, *actor_user_id]),
                         "Deleted credential"
+                    );
+                }
+            }
+            Self::CredentialUpdated {
+                credential_type,
+                credential_name,
+                via,
+                user_id,
+                username,
+                actor_user_id,
+            } => {
+                if let Some(credential_name) = credential_name {
+                    info!(
+                        target: "audit",
+                        _type = "CredentialUpdated1",
+                        credential_type = %credential_type,
+                        credential_name = %credential_name,
+                        via = %via,
+                        user_id = %user_id,
+                        username = %username,
+                        related_users = ?format_related_ids(&[*user_id, *actor_user_id]),
+                        "Updated credential"
+                    );
+                } else {
+                    info!(
+                        target: "audit",
+                        _type = "CredentialUpdated1",
+                        credential_type = %credential_type,
+                        via = %via,
+                        user_id = %user_id,
+                        username = %username,
+                        related_users = ?format_related_ids(&[*user_id, *actor_user_id]),
+                        "Updated credential"
                     );
                 }
             }

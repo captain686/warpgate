@@ -105,6 +105,10 @@
     }
 
     async function update () {
+        if (!canEditCurrentUser()) {
+            return
+        }
+
         try {
             user = await api.updateUser({
                 id: params.id,
@@ -121,11 +125,43 @@
     }
 
     async function remove () {
+        if (!canDeleteCurrentUser()) {
+            return
+        }
+
         await api.deleteUser(user!)
         replace('/config/users')
     }
 
+    function currentUserHasAdminRole(): boolean {
+        return Object.values(adminRoleIsAllowed).some(Boolean)
+    }
+
+    function lacksAdminAccountManagementPermission(): boolean {
+        return currentUserHasAdminRole() && !$adminPermissions.usersManageAdmins
+    }
+
+    function canEditCurrentUser(): boolean {
+        return $adminPermissions.usersEdit && !lacksAdminAccountManagementPermission()
+    }
+
+    function canDeleteCurrentUser(): boolean {
+        return $adminPermissions.usersDelete && !lacksAdminAccountManagementPermission()
+    }
+
+    function canAssignAccessRoles(): boolean {
+        return $adminPermissions.accessRolesAssign && !lacksAdminAccountManagementPermission()
+    }
+
+    function canManageAdminRoles(): boolean {
+        return $adminPermissions.adminRolesManage && $adminPermissions.usersManageAdmins
+    }
+
     async function toggleRole (role: Role) {
+        if (!canAssignAccessRoles()) {
+            return
+        }
+
         // Check if there's an active (non-expired) assignment
         const activeAssignment = userRoles.find(r => r.id === role.id && r.isActive)
         // Check if there's an expired assignment
@@ -166,6 +202,9 @@
     }
 
     function openExpiryModal(roleAssignment: UserRoleAssignmentResponse) {
+        if (!canAssignAccessRoles()) {
+            return
+        }
         editingRole = roleAssignment
         expiryDate = roleAssignment.expiresAt ? toLocalISO(roleAssignment.expiresAt) : null
         selectedExpiryPreset = expiryDate ? 'custom' : null
@@ -173,6 +212,11 @@
     }
 
     async function saveExpiry() {
+        if (!canAssignAccessRoles()) {
+            showExpiryModal = false
+            return
+        }
+
         try {
             const expiresAt = expiryDate ? new Date(expiryDate) : undefined
 
@@ -238,6 +282,10 @@
     }
 
     async function toggleAdminRole (role: AdminRole) {
+        if (!canManageAdminRoles()) {
+            return
+        }
+
         if (adminRoleIsAllowed[role.id]) {
             await api.deleteUserAdminRole({
                 id: user!.id,
@@ -254,6 +302,10 @@
     }
 
     async function unlinkFromLdap () {
+        if (!canEditCurrentUser()) {
+            return
+        }
+
         try {
             user = await api.unlinkUserFromLdap({ id: params.id })
             error = null
@@ -263,6 +315,10 @@
     }
 
     async function autoLinkToLdap () {
+        if (!canEditCurrentUser()) {
+            return
+        }
+
         try {
             user = await api.autoLinkUserToLdap({ id: params.id })
             error = null
@@ -287,12 +343,16 @@
             <Section id="info" title="General">
                 <div class="d-flex align-items-center gap-3">
                     <FormGroup floating label="Username" class="flex-grow-1">
-                        <Input bind:value={user.username} disabled={!user.ldapServerId} />
+                        <Input bind:value={user.username} disabled={!user.ldapServerId || !canEditCurrentUser()} />
                     </FormGroup>
 
                     {#if $serverInfo?.hasLdap}
                     <Dropdown class="mb-3">
-                        <DropdownToggle color={user.ldapServerId ? 'info' : 'secondary'} class="d-flex align-items-center gap-2">
+                        <DropdownToggle
+                            color={user.ldapServerId ? 'info' : 'secondary'}
+                            class="d-flex align-items-center gap-2"
+                            disabled={!canEditCurrentUser()}
+                        >
                             {#if user.ldapServerId}
                                 <Fa icon={faLink} fw />
                             {/if}
@@ -301,12 +361,12 @@
                         </DropdownToggle>
                         <DropdownMenu right={true}>
                             {#if user.ldapServerId}
-                            <DropdownItem on:click={unlinkFromLdap}>
+                            <DropdownItem disabled={!canEditCurrentUser()} on:click={unlinkFromLdap}>
                                 <Fa icon={faUnlink} fw />
                                 Unlink from LDAP
                             </DropdownItem>
                             {:else}
-                            <DropdownItem on:click={autoLinkToLdap}>
+                            <DropdownItem disabled={!canEditCurrentUser()} on:click={autoLinkToLdap}>
                                 <Fa icon={faLink} fw />
                                 Auto-link to LDAP
                             </DropdownItem>
@@ -317,22 +377,37 @@
                 </div>
 
                 <FormGroup floating label="Description">
-                    <Input bind:value={user.description} />
+                    <Input bind:value={user.description} disabled={!canEditCurrentUser()} />
                 </FormGroup>
             </Section>
 
             {#if $adminPermissions.usersEdit}
             <Section id="credentials" title="Credentials" hideHeading>
-                <CredentialEditor
-                    userId={user.id}
-                    username={user.username}
-                    bind:credentialPolicy={user.credentialPolicy!}
-                    ldapLinked={!!user.ldapServerId}
-                />
+                {#if canEditCurrentUser()}
+                    <CredentialEditor
+                        userId={user.id}
+                        username={user.username}
+                        bind:credentialPolicy={user.credentialPolicy!}
+                        ldapLinked={!!user.ldapServerId}
+                    />
+                {:else}
+                    <Alert color="secondary">
+                        Credentials for administrator accounts are restricted for your administrator role.
+                    </Alert>
+                {/if}
             </Section>
             {/if}
 
             <Section id="roles" title="Access roles">
+                {#if !canAssignAccessRoles()}
+                    <Alert color="secondary">
+                        {#if lacksAdminAccountManagementPermission()}
+                            Managing access roles for administrator accounts requires the Manage administrator accounts permission.
+                        {:else}
+                            Access role assignments are view-only for your administrator role.
+                        {/if}
+                    </Alert>
+                {/if}
                 <div class="list-group list-group-flush">
                     {#each allRoles as role (role.id)}
                         {@const activeAssignment = userRoles.find(ur => ur.id === role.id && ur.isActive)}
@@ -348,6 +423,7 @@
                                     class="mb-0"
                                     type="switch"
                                     on:change={() => toggleRole(role)}
+                                    disabled={!canAssignAccessRoles()}
                                     checked={isActive} />
                                 <div>
                                     <div class="{isExpired ? 'text-decoration-line-through text-muted' : ''}">{role.name}</div>
@@ -383,6 +459,7 @@
                                     <Button
                                         id="options-button-{role.id}"
                                         color="link"
+                                        disabled={!canAssignAccessRoles()}
                                         on:click={() => openExpiryModal(activeAssignment)}
                                     >
                                         <Fa icon={faWrench}/>
@@ -398,6 +475,11 @@
             </Section>
 
             <Section id="admin-roles" title="Admin roles">
+                {#if !canManageAdminRoles()}
+                    <Alert color="secondary">
+                        Managing admin role assignments requires both Admin roles manage and Manage administrator accounts permissions.
+                    </Alert>
+                {/if}
                 <div class="list-group list-group-flush">
                     {#each allAdminRoles as role (role.id)}
                         <label
@@ -409,7 +491,7 @@
                                 class="mb-0 me-2"
                                 type="switch"
                                 on:change={() => toggleAdminRole(role)}
-                                disabled={!$adminPermissions.adminRolesManage}
+                                disabled={!canManageAdminRoles()}
                                 checked={adminRoleIsAllowed[role.id]} />
                             <div>
                                 <div>{role.name}</div>
@@ -431,10 +513,11 @@
                     <RateLimitInput
                         id="rateLimitBytesPerSecond"
                         bind:value={user.rateLimitBytesPerSecond}
+                        disabled={!canEditCurrentUser()}
                     />
                 </FormGroup>
 
-                <AllowedIpRangesEditor bind:ranges={user.allowedIpRanges} />
+                <AllowedIpRangesEditor bind:ranges={user.allowedIpRanges} disabled={!canEditCurrentUser()} />
             </Section>
         </SectionedForm>
 
@@ -448,13 +531,13 @@
             <AsyncButton
                 color="primary"
                 click={update}
-                disabled={!$adminPermissions.usersEdit}
+                disabled={!canEditCurrentUser()}
             >Update</AsyncButton>
 
             <AsyncButton
                 color="danger"
                 click={requestRemove}
-                disabled={!$adminPermissions.usersDelete}
+                disabled={!canDeleteCurrentUser()}
             >Remove</AsyncButton>
         </StickyActionBar>
         {/if}

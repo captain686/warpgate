@@ -97,6 +97,19 @@ pub async fn require_admin_permission(
     }
 }
 
+pub async fn require_any_admin_permission(
+    ctx: &warpgate_common_http::AuthenticatedRequestContext,
+    permissions: &[AdminPermission],
+) -> Result<(), WarpgateError> {
+    for permission in permissions {
+        if has_admin_permission(ctx, Some(*permission)).await? {
+            return Ok(());
+        }
+    }
+
+    Err(WarpgateError::NoAdminAccess)
+}
+
 pub async fn require_manage_admin_accounts_permission(
     ctx: &warpgate_common_http::AuthenticatedRequestContext,
     user_id: Uuid,

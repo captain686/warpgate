@@ -5,9 +5,10 @@
 
     interface Props {
         ranges: string[] | null | undefined;
+        disabled?: boolean;
     }
 
-    let { ranges = $bindable() }: Props = $props()
+    let { ranges = $bindable(), disabled = false }: Props = $props()
 
     const cidrRegex = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$|^[0-9a-fA-F:]+\/\d{1,3}$/
     function isValidCidr (value: string | undefined | null): boolean {
@@ -35,6 +36,7 @@
                 <Input
                     placeholder="e.g. 192.168.1.0/24"
                     value={range}
+                    {disabled}
                     on:input={(e) => {
                         if (ranges) {
                             ranges[index] = e.target.value
@@ -46,6 +48,7 @@
                 <Button
                     color="link"
                     size="sm"
+                    {disabled}
                     on:click={() => removeIpRange(index)}
                 >
                     <Fa icon={faTrash} />
@@ -62,6 +65,7 @@
         class="d-flex align-items-center gap-2"
         color="secondary"
         size="sm"
+        {disabled}
         on:click={addIpRange}
     >
         <Fa icon={faPlus} class="me-1" />

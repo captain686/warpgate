@@ -9,12 +9,13 @@
         ModalFooter,
     } from '@sveltestrap/sveltestrap'
 
-    import { type ExistingPublicKeyCredential } from './lib/api'
+    import { ResponseError, stringifyError, type ExistingPublicKeyCredential } from './lib/api'
+    import Alert from 'common/sveltestrap-s5-ports/Alert.svelte'
 
     interface Props {
         isOpen: boolean
         instance?: ExistingPublicKeyCredential
-        save: (label: string, opensshPublicKey: string) => void
+        save: (label: string, opensshPublicKey: string) => Promise<void> | void
     }
 
     let {
@@ -27,10 +28,18 @@
     let label: string = $state('')
     let opensshPublicKey: string = $state('')
     let validated = $state(false)
+    let errorText: string | null = $state(null)
 
     const PK_REGEX = /^ssh-([\w-]+) [A-Za-z0-9+/=]+( (?<comment>[^ ]+))?$/
 
-    function _save () {
+    function resetFields () {
+        label = instance?.label ?? ''
+        opensshPublicKey = instance?.opensshPublicKey ?? ''
+        validated = false
+        errorText = null
+    }
+
+    async function _save () {
         if (!opensshPublicKey || !label) {
             return
         }
@@ -38,12 +47,22 @@
             const parts = opensshPublicKey.split(' ').filter(x => x)
             opensshPublicKey = `${parts[0]} ${parts[1]}`
         }
-        isOpen = false
-        save(label, opensshPublicKey)
+        errorText = null
+        try {
+            await save(label, opensshPublicKey)
+            isOpen = false
+        } catch (err) {
+            errorText = err instanceof ResponseError
+                ? await stringifyError(err)
+                : err instanceof Error
+                    ? err.message
+                    : 'Failed to save SSH key'
+        }
     }
 
     function _cancel () {
         isOpen = false
+        errorText = null
     }
 
     $effect(() => field?.addEventListener('paste', e => {
@@ -63,14 +82,11 @@
 </script>
 
 <Modal toggle={_cancel} isOpen={isOpen} on:open={() => {
-    if (instance) {
-        label = instance.label
-        opensshPublicKey = instance.opensshPublicKey
-    }
+    resetFields()
     field?.focus()
 }}>
     <Form {validated} on:submit={e => {
-        _save()
+        void _save()
         e.preventDefault()
     }}>
         <ModalBody>
@@ -90,6 +106,9 @@
                     placeholder="ssh-XXX YYYYYY"
                     bind:value={opensshPublicKey} />
             </FormGroup>
+            {#if errorText}
+                <Alert color="danger" class="mt-3 mb-0">{errorText}</Alert>
+            {/if}
         </ModalBody>
         <ModalFooter>
             <Button

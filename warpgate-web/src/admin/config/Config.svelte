@@ -3,6 +3,7 @@
     import { wrap } from 'svelte-spa-router/wrap'
     import Router from 'svelte-spa-router'
     import { serverInfo } from 'gateway/lib/store'
+    import { adminPermissions } from '../lib/store'
 
     const routes = {
         '/targets/create/:kind': wrap({
@@ -80,24 +81,38 @@
     }
 
     let sidebarMode = $state(false)
+
+    function canManageAccessRoles(): boolean {
+        return $adminPermissions.accessRolesCreate
+            || $adminPermissions.accessRolesEdit
+            || $adminPermissions.accessRolesDelete
+    }
+
+    function canManageTargets(): boolean {
+        return $adminPermissions.targetsCreate
+            || $adminPermissions.targetsEdit
+            || $adminPermissions.targetsDelete
+    }
 </script>
 
 {#snippet navItems()}
-    <NavListItem
-        class="mb-2"
-        title="Targets"
-        description="Destinations for users to connect to"
-        href="/config/targets"
-        small={sidebarMode}
-    />
+    {#if canManageTargets()}
+        <NavListItem
+            class="mb-2"
+            title="Targets"
+            description="Destinations for users to connect to"
+            href="/config/targets"
+            small={sidebarMode}
+        />
 
-    <NavListItem
-        class="mb-2"
-        title="Target groups"
-        description="Organize targets into groups"
-        href="/config/target-groups"
-        small={sidebarMode}
-    />
+        <NavListItem
+            class="mb-2"
+            title="Target groups"
+            description="Organize targets into groups"
+            href="/config/target-groups"
+            small={sidebarMode}
+        />
+    {/if}
 
     <NavListItem
         class="mb-2"
@@ -107,13 +122,15 @@
         small={sidebarMode}
     />
 
-    <NavListItem
-        class="mb-2"
-        title="Access roles"
-        description="Grant users access to roles"
-        href="/config/access-roles"
-        small={sidebarMode}
-    />
+    {#if canManageAccessRoles()}
+        <NavListItem
+            class="mb-2"
+            title="Access roles"
+            description="Grant users access to roles"
+            href="/config/access-roles"
+            small={sidebarMode}
+        />
+    {/if}
 
     <NavListItem
         class="mb-2"

@@ -248,6 +248,7 @@ impl ListApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<GetPublicKeyCredentialsResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::UsersEdit)).await?;
+        require_manage_admin_accounts_permission(&ctx, *user_id).await?;
 
         let db = ctx.services().db.lock().await;
         let objects = PublicKeyCredential::Entity::find()
@@ -457,9 +458,25 @@ impl DetailApi {
 
         let model = model.update(&*db).await;
         match model {
-            Ok(model) => Ok(UpdatePublicKeyCredentialResponse::Updated(Json(
-                model.into(),
-            ))),
+            Ok(model) => {
+                let Some(user) = User::Entity::find_by_id(*user_id).one(&*db).await? else {
+                    return Ok(UpdatePublicKeyCredentialResponse::NotFound);
+                };
+
+                AuditEvent::CredentialUpdated {
+                    credential_type: "public_key".to_string(),
+                    credential_name: Some(body.label.clone()),
+                    via: CredentialChangedVia::Admin,
+                    user_id: *user_id,
+                    username: user.username,
+                    actor_user_id: ctx.auth.user_id(),
+                }
+                .emit();
+
+                Ok(UpdatePublicKeyCredentialResponse::Updated(Json(
+                    model.into(),
+                )))
+            }
             Err(DbErr::RecordNotFound(_)) => Ok(UpdatePublicKeyCredentialResponse::NotFound),
             Err(e) => Err(e.into()),
         }

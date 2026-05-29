@@ -82,6 +82,7 @@ impl ListApi {
         _sec_scheme: AnySecurityScheme,
     ) -> Result<GetSsoCredentialsResponse, WarpgateError> {
         require_admin_permission(&ctx, Some(AdminPermission::UsersEdit)).await?;
+        require_manage_admin_accounts_permission(&ctx, *user_id).await?;
 
         let db = ctx.services().db.lock().await;
 

@@ -30,7 +30,18 @@
 
 <script lang="ts">
     import { faCertificate, faIdBadge, faKey, faKeyboard, faMobileScreen } from '@fortawesome/free-solid-svg-icons'
-    import { api, CredentialKind, type ExistingPublicKeyCredential, type ExistingSsoCredential, type UserRequireCredentialsPolicy, type ParameterValues, type Target } from 'admin/lib/api'
+    import {
+        api,
+        CredentialKind,
+        ResponseError,
+        stringifyError,
+        type ExistingPasswordCredential,
+        type ExistingPublicKeyCredential,
+        type ExistingSsoCredential,
+        type UserRequireCredentialsPolicy,
+        type ParameterValues,
+        type Target,
+    } from 'admin/lib/api'
     import { SvelteSet } from 'svelte/reactivity'
     import Fa from 'svelte-fa'
     import { Button } from '@sveltestrap/sveltestrap'
@@ -45,6 +56,7 @@
     import CredentialUsedStateBadge from 'common/CredentialUsedStateBadge.svelte'
     import Loadable from 'common/Loadable.svelte'
     import EmptyState from 'common/EmptyState.svelte'
+    import Alert from 'common/sveltestrap-s5-ports/Alert.svelte'
     import Tooltip from 'common/sveltestrap-s5-ports/Tooltip.svelte'
     import { adminPermissions } from 'admin/lib/store'
     import ConfirmModal from 'common/ConfirmModal.svelte'
@@ -62,6 +74,7 @@
     let sshTargets: Target[] = $state([])
 
     let creatingPassword = $state(false)
+    let editingPasswordCredentialInstance: ExistingPasswordCredential | null = $state(null)
     let creatingOtp = $state(false)
     let editingSsoCredential = $state(false)
     let editingSsoCredentialInstance: ExistingSsoCredential|null = $state(null)
@@ -70,6 +83,7 @@
     let editingCertificateCredential = $state(false)
     let issuingPublicKey = $state(false)
     let selectedSshScopeId = $state('')
+    let credentialActionError: string | null = $state(null)
     let credentialActionConfirmationOpen = $state(false)
     let pendingCredentialAction: {
         title: string
@@ -181,6 +195,14 @@
         })))
     }
 
+    async function showCredentialActionError(error: unknown, fallback: string) {
+        credentialActionError = error instanceof ResponseError
+            ? await stringifyError(error)
+            : error instanceof Error
+                ? error.message
+                : fallback
+    }
+
     async function deleteCredential (credential: ExistingCredential) {
         if (credential.kind === CredentialKind.Password) {
             await api.deletePasswordCredential({
@@ -233,20 +255,35 @@
             return
         }
 
-        void deleteCredential(credential)
+        void deleteCredential(credential).catch(error => showCredentialActionError(error, 'Failed to delete credential'))
     }
 
-    async function createPassword (password: string) {
-        const credential = await api.createPasswordCredential({
-            userId,
-            newPasswordCredential: {
-                password,
-            },
-        })
-        credentials.push({
-            kind: CredentialKind.Password,
-            ...credential,
-        })
+    async function savePassword (password: string) {
+        credentialActionError = null
+
+        if (editingPasswordCredentialInstance) {
+            await api.updatePasswordCredential({
+                userId,
+                id: editingPasswordCredentialInstance.id,
+                newPasswordCredential: {
+                    password,
+                },
+            })
+        } else {
+            const credential = await api.createPasswordCredential({
+                userId,
+                newPasswordCredential: {
+                    password,
+                },
+            })
+            credentials.push({
+                kind: CredentialKind.Password,
+                ...credential,
+            })
+        }
+
+        creatingPassword = false
+        editingPasswordCredentialInstance = null
     }
 
     async function createOtp (secretKey: number[], targetId?: string) {
@@ -458,7 +495,12 @@
     }
 
     async function confirmPendingCredentialAction() {
-        await pendingCredentialAction?.run()
+        credentialActionError = null
+        try {
+            await pendingCredentialAction?.run()
+        } catch (error) {
+            await showCredentialActionError(error, 'Failed to update credential')
+        }
         pendingCredentialAction = undefined
     }
 
@@ -485,6 +527,51 @@
         }
         return sshTargets.find(target => target.id === targetId)?.name ?? targetId
     }
+
+    function canShowChangeAction(credential: ExistingCredential): boolean {
+        if (!$adminPermissions.usersEdit) {
+            return false
+        }
+
+        if (credential.kind === CredentialKind.Password || credential.kind === CredentialKind.Sso) {
+            return true
+        }
+
+        return credential.kind === CredentialKind.PublicKey && !ldapLinked && !credential.issuedByWarpgate
+    }
+
+    function canShowDeleteAction(credential: ExistingCredential): boolean {
+        if (!$adminPermissions.usersEdit || credential.kind === CredentialKind.Password) {
+            return false
+        }
+
+        if (credential.kind === CredentialKind.PublicKey) {
+            return !ldapLinked && !credential.issuedByWarpgate
+        }
+
+        return true
+    }
+
+    function openCredentialEditor(credential: ExistingCredential) {
+        credentialActionError = null
+
+        if (credential.kind === CredentialKind.Password) {
+            editingPasswordCredentialInstance = credential
+            creatingPassword = true
+            return
+        }
+
+        if (credential.kind === CredentialKind.Sso) {
+            editingSsoCredentialInstance = credential
+            editingSsoCredential = true
+            return
+        }
+
+        if (credential.kind === CredentialKind.PublicKey) {
+            editingPublicKeyCredentialInstance = credential
+            editingPublicKeyCredential = true
+        }
+    }
 </script>
 
 <div class="d-flex mt-4 mb-2 header">
@@ -499,7 +586,10 @@
         {/each}
     </select>
     {/if}
-    <Button size="sm" color="link" on:click={() => creatingPassword = true}>
+    <Button size="sm" color="link" on:click={() => {
+        editingPasswordCredentialInstance = null
+        creatingPassword = true
+    }}>
         Add password
     </Button>
     <Button size="sm" color="link" on:click={() => {
@@ -541,6 +631,12 @@
 </div>
 
 <Loadable promise={loadPromise}>
+    {#if credentialActionError}
+        <Alert color="danger" dismissible on:dismiss={() => credentialActionError = null} class="mb-3">
+            {credentialActionError}
+        </Alert>
+    {/if}
+
     {#if credentials.length === 0}
         <EmptyState
             title="No credentials added"
@@ -612,20 +708,12 @@
                 </span>
             {/if}
 
-            {#if credential.kind === CredentialKind.PublicKey || credential.kind === CredentialKind.Sso}
+            {#if canShowChangeAction(credential)}
             <Button
                 class="px-0"
                 color="link"
-                disabled={credential.kind === CredentialKind.PublicKey && (ldapLinked || !$adminPermissions.usersEdit || credential.issuedByWarpgate)}
                 on:click={e => {
-                    if (credential.kind === CredentialKind.Sso) {
-                        editingSsoCredentialInstance = credential
-                        editingSsoCredential = true
-                    }
-                    if (credential.kind === CredentialKind.PublicKey) {
-                        editingPublicKeyCredentialInstance = credential
-                        editingPublicKeyCredential = true
-                    }
+                    openCredentialEditor(credential)
                     e.preventDefault()
                 }}>
                 Change
@@ -643,11 +731,10 @@
                 Revoke
             </Button>
             {/if}
-            {#if credential.kind !== CredentialKind.PublicKey || !credential.issuedByWarpgate}
+            {#if canShowDeleteAction(credential)}
             <Button
                 class="px-0"
                 color="link"
-                disabled={credential.kind === CredentialKind.PublicKey && (ldapLinked || !$adminPermissions.usersEdit)}
                 on:click={e => {
                     requestDeleteCredential(credential)
                     e.preventDefault()
@@ -693,7 +780,8 @@
 {#if creatingPassword}
 <CreatePasswordModal
     bind:isOpen={creatingPassword}
-    create={createPassword}
+    create={savePassword}
+    actionLabel={editingPasswordCredentialInstance ? 'Save' : 'Create'}
 />
 {/if}
 

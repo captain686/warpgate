@@ -295,6 +295,7 @@
 <CreatePasswordModal
     bind:isOpen={changingPassword}
     create={changePassword}
+    actionLabel="Save"
 />
 {/if}
 

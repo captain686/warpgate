@@ -2,7 +2,7 @@
     import { getContext } from 'svelte'
     import { get } from 'svelte/store'
     import { querystring, replace } from 'svelte-spa-router'
-    import { Button, FormGroup } from '@sveltestrap/sveltestrap'
+    import { FormGroup } from '@sveltestrap/sveltestrap'
     import Fa from 'svelte-fa'
     import { faArrowRight } from '@fortawesome/free-solid-svg-icons'
     import { faGoogle, faMicrosoft, faApple } from '@fortawesome/free-brands-svg-icons'
@@ -131,10 +131,131 @@
             busy = false
         }
     }
+
+    function needsPasswordInput (): boolean {
+        return (
+            authState === ApiAuthState.NotStarted ||
+            authState === ApiAuthState.PasswordNeeded ||
+            authState === ApiAuthState.Failed ||
+            authState === ApiAuthState.IpRejected
+        ) && (!$serverInfo?.minimizePasswordLogin || showPasswordLogin)
+    }
+
+    function canUseSso (): boolean {
+        return (
+            authState === ApiAuthState.SsoNeeded ||
+            authState === ApiAuthState.NotStarted ||
+            authState === ApiAuthState.Failed ||
+            authState === ApiAuthState.IpRejected
+        )
+    }
+
+    function canRevealPasswordLogin (): boolean {
+        return (
+            authState === ApiAuthState.NotStarted ||
+            authState === ApiAuthState.PasswordNeeded ||
+            authState === ApiAuthState.Failed ||
+            authState === ApiAuthState.IpRejected
+        ) && !!$serverInfo?.minimizePasswordLogin && !showPasswordLogin
+    }
+
+    function canCancel (): boolean {
+        return authState !== ApiAuthState.NotStarted && authState !== ApiAuthState.Failed && authState !== ApiAuthState.IpRejected
+    }
+
+    function pageTitle (): string {
+        switch (authState) {
+            case ApiAuthState.OtpNeeded:
+                return 'Verify your identity'
+            case ApiAuthState.SsoNeeded:
+                return 'Continue with single sign-on'
+            default:
+                return 'Sign in'
+        }
+    }
+
+    function pageSubtitle (): string {
+        switch (authState) {
+            case ApiAuthState.OtpNeeded:
+                return 'Enter the one-time password to complete authentication.'
+            case ApiAuthState.SsoNeeded:
+                return 'Choose an approved identity provider to continue.'
+            case ApiAuthState.Failed:
+                return 'Authentication failed. Review the account details and try again.'
+            case ApiAuthState.IpRejected:
+                return 'This sign-in attempt is outside the network policy for this account.'
+            default:
+                return 'Authenticate to access managed sessions and approved targets.'
+        }
+    }
+
+    function statusLabel (): string {
+        switch (authState) {
+            case ApiAuthState.OtpNeeded:
+                return 'Verification required'
+            case ApiAuthState.SsoNeeded:
+                return 'Provider selection'
+            case ApiAuthState.Failed:
+                return 'Authentication failed'
+            case ApiAuthState.IpRejected:
+                return 'Access denied'
+            case ApiAuthState.PasswordNeeded:
+                return 'Credentials required'
+            case ApiAuthState.Success:
+                return 'Authenticated'
+            default:
+                return 'Ready'
+        }
+    }
+
+    function flowLabel (): string {
+        if (authState === ApiAuthState.OtpNeeded) {
+            return 'One-time password'
+        }
+        if (authState === ApiAuthState.SsoNeeded) {
+            return 'Single sign-on'
+        }
+        if (needsPasswordInput() && canUseSso()) {
+            return 'Password or SSO'
+        }
+        if (needsPasswordInput()) {
+            return 'Username and password'
+        }
+        if (canUseSso()) {
+            return 'Single sign-on'
+        }
+        return 'Authentication'
+    }
+
+    function destinationLabel (): string {
+        if (!nextURL) {
+            return 'Gateway home'
+        }
+        try {
+            const target = new URL(nextURL, location.origin)
+            const summary = `${target.origin === location.origin ? '' : target.origin}${target.pathname}${target.search}${target.hash}`
+            return summary || 'Gateway home'
+        } catch {
+            return nextURL
+        }
+    }
+
+    function providerCaption (provider: SsoProviderDescription): string {
+        switch (provider.kind) {
+            case SsoProviderKind.Google:
+                return 'Google account'
+            case SsoProviderKind.Azure:
+                return 'Microsoft account'
+            case SsoProviderKind.Apple:
+                return 'Apple account'
+            default:
+                return 'Single sign-on provider'
+        }
+    }
 </script>
 
 {#snippet localLoginForm()}
-    <form autocomplete="on" onsubmit={e => {
+    <form class="auth-form" autocomplete="on" onsubmit={e => {
         login()
         e.preventDefault()
     }}>
@@ -161,158 +282,485 @@
                 class="form-control" />
         </FormGroup>
 
-        <Button
-            class="d-flex align-items-center"
-            color="primary"
+        <button
+            class="btn btn-primary auth-submit-button d-flex align-items-center justify-content-center"
             type="submit"
             disabled={busy}
         >
-            Login
+            Sign in
             <Fa class="ms-2" fw icon={faArrowRight} />
-        </Button>
+        </button>
     </form>
 {/snippet}
 
 <Loadable promise={initPromise}>
-
-    <div class="login-panel">
-        <div class="page-summary-bar">
-            {#if authState === ApiAuthState.NotStarted || authState === ApiAuthState.Failed || authState === ApiAuthState.IpRejected}
-                <h1>Welcome</h1>
-            {:else}
-                <h1>Continue login</h1>
-            {/if}
-        </div>
-        {#if authState === ApiAuthState.OtpNeeded}
-            <form class="d-flex align-items-stretch gap-2" onsubmit={e => {
-                login()
-                e.preventDefault()
-            }}>
-                <FormGroup floating label="One-time password" class="w-100">
-                    <!-- svelte-ignore a11y_autofocus -->
-                    <input
-                        bind:value={otp}
-                        bind:this={otpInput}
-                        name="otp"
-                        required
-                        pattern="\d&lbrace;6,8&rbrace;"
-                        autofocus
-                        inputmode="numeric"
-                        disabled={busy}
-                        class="form-control" />
-                </FormGroup>
-
-                <Button
-                class="mb-3"
-                    color="primary"
-                    type="submit"
-                    disabled={busy}
-                >
-                    <Fa icon={faArrowRight} />
-                </Button>
-            </form>
-        {/if}
-        {#if (authState === ApiAuthState.NotStarted || authState === ApiAuthState.PasswordNeeded || authState === ApiAuthState.Failed || authState === ApiAuthState.IpRejected) && (!$serverInfo?.minimizePasswordLogin || showPasswordLogin)}
-            <!-- eslint-disable-next-line @typescript-eslint/no-confusing-void-expression -->
-            {@render localLoginForm()}
-        {/if}
-
-        <div class="mt-3"></div>
-
-        {#if authState === ApiAuthState.Failed}
-            <Alert color="danger">Incorrect credentials</Alert>
-        {/if}
-        {#if authState === ApiAuthState.IpRejected}
-            <Alert color="danger">Login denied: your IP address is not in the allowed range for this user</Alert>
-        {/if}
-        {#if serverErrorMessage}
-            <Alert color="danger">{serverErrorMessage}</Alert>
-        {/if}
-        {#if error}
-            <Alert color="danger">{error}</Alert>
-        {/if}
-    </div>
-
-    {#if authState === ApiAuthState.SsoNeeded || authState === ApiAuthState.NotStarted || authState === ApiAuthState.Failed || authState === ApiAuthState.IpRejected}
-        <Loadable promise={ssoProvidersPromise}>
-            {#snippet children(ssoProviders)}
-                <div class="mt-3 sso-buttons">
-                    {#each ssoProviders as ssoProvider (ssoProvider.name)}
-                        <button
-                            class="btn btn-secondary"
-                            disabled={busy}
-                            onclick={() => startSSO(ssoProvider)}
-                        >
-                            {#if ssoProvider.kind === SsoProviderKind.Google}
-                                <Fa fw class="me-2" icon={faGoogle} />
-                            {/if}
-                            {#if ssoProvider.kind === SsoProviderKind.Azure}
-                                <Fa fw class="me-2" icon={faMicrosoft} />
-                            {/if}
-                            {#if ssoProvider.kind === SsoProviderKind.Apple}
-                                <Fa fw class="me-2" icon={faApple} />
-                            {/if}
-                            {ssoProvider.label || ssoProvider.name}
-                        </button>
-                    {/each}
+    <div class="auth-shell">
+        <section class="auth-panel">
+            <div class="auth-panel-header">
+                <div class="auth-kicker">Secure access</div>
+                <div class="page-summary-bar">
+                    <div>
+                        <h1>{pageTitle()}</h1>
+                        <div class="text-muted">{pageSubtitle()}</div>
+                    </div>
                 </div>
-            {/snippet}
-        </Loadable>
-    {/if}
 
-    {#if (authState === ApiAuthState.NotStarted || authState === ApiAuthState.PasswordNeeded || authState === ApiAuthState.Failed || authState === ApiAuthState.IpRejected) && $serverInfo?.minimizePasswordLogin && !showPasswordLogin}
-        <div class="mt-3 text-center">
-            <!-- svelte-ignore a11y_invalid_attribute -->
-            <a
-                href="#"
-                class="password-login-link"
-                onclick={e => {
-                    e.preventDefault()
-                    showPasswordLogin = true
-                }}
-            >
-                Password login
-            </a>
-        </div>
-    {/if}
+                <div class="auth-meta-grid">
+                    <div class="auth-meta-card">
+                        <span class="auth-meta-label">Status</span>
+                        <span class="auth-meta-value">{statusLabel()}</span>
+                    </div>
+                    <div class="auth-meta-card">
+                        <span class="auth-meta-label">Flow</span>
+                        <span class="auth-meta-value">{flowLabel()}</span>
+                    </div>
+                    <div class="auth-meta-card">
+                        <span class="auth-meta-label">After sign-in</span>
+                        <span class="auth-meta-value">{destinationLabel()}</span>
+                    </div>
+                </div>
+            </div>
 
-    {#if authState !== ApiAuthState.NotStarted && authState !== ApiAuthState.Failed && authState !== ApiAuthState.IpRejected}
-        <button
-            class="btn w-100 mt-3 btn-secondary"
-            onclick={cancel}
-        >
-            Cancel
-        </button>
-    {/if}
+            <div class="auth-panel-body">
+                {#if authState === ApiAuthState.Failed || authState === ApiAuthState.IpRejected || serverErrorMessage || error}
+                    <div class="auth-feedback">
+                        {#if authState === ApiAuthState.Failed}
+                            <Alert color="danger">Incorrect credentials</Alert>
+                        {/if}
+                        {#if authState === ApiAuthState.IpRejected}
+                            <Alert color="danger">Login denied: your IP address is not in the allowed range for this user</Alert>
+                        {/if}
+                        {#if serverErrorMessage}
+                            <Alert color="danger">{serverErrorMessage}</Alert>
+                        {/if}
+                        {#if error}
+                            <Alert color="danger">{error}</Alert>
+                        {/if}
+                    </div>
+                {/if}
+
+                {#if authState === ApiAuthState.OtpNeeded}
+                    <section class="auth-section">
+                        <div class="auth-section-header">
+                            <div>
+                                <h2>Verification code</h2>
+                                <p>Enter the current one-time password from your authenticator app.</p>
+                            </div>
+                        </div>
+
+                        <form class="auth-form auth-form-otp" onsubmit={e => {
+                            login()
+                            e.preventDefault()
+                        }}>
+                            <FormGroup floating label="One-time password" class="w-100">
+                                <!-- svelte-ignore a11y_autofocus -->
+                                <input
+                                    bind:value={otp}
+                                    bind:this={otpInput}
+                                    name="otp"
+                                    autocomplete="one-time-code"
+                                    required
+                                    pattern={'[0-9]{6,8}'}
+                                    autofocus
+                                    inputmode="numeric"
+                                    disabled={busy}
+                                    class="form-control" />
+                            </FormGroup>
+
+                            <button
+                                class="btn btn-primary auth-submit-button"
+                                type="submit"
+                                disabled={busy}
+                            >
+                                Verify
+                                <Fa icon={faArrowRight} />
+                            </button>
+                        </form>
+                    </section>
+                {/if}
+
+                {#if needsPasswordInput()}
+                    <section class="auth-section">
+                        <div class="auth-section-header">
+                            <div>
+                                <h2>Account sign-in</h2>
+                                <p>Use your Warpgate username and password to continue.</p>
+                            </div>
+                        </div>
+
+                        <!-- eslint-disable-next-line @typescript-eslint/no-confusing-void-expression -->
+                        {@render localLoginForm()}
+                    </section>
+                {/if}
+
+                {#if canUseSso()}
+                    <Loadable promise={ssoProvidersPromise}>
+                        {#snippet children(ssoProviders)}
+                            {#if ssoProviders.length}
+                                <section class="auth-section">
+                                    <div class="auth-divider">
+                                        <span>or continue with</span>
+                                    </div>
+
+                                    <div class="auth-section-header">
+                                        <div>
+                                            <h2>Single sign-on</h2>
+                                            <p>Use an approved identity provider for this gateway.</p>
+                                        </div>
+                                    </div>
+
+                                    <div class="sso-buttons">
+                                        {#each ssoProviders as ssoProvider (ssoProvider.name)}
+                                            <button
+                                                type="button"
+                                                class="auth-option-button sso-button"
+                                                disabled={busy}
+                                                onclick={() => startSSO(ssoProvider)}
+                                            >
+                                                <span class="sso-button-icon">
+                                                    {#if ssoProvider.kind === SsoProviderKind.Google}
+                                                        <Fa fw icon={faGoogle} />
+                                                    {/if}
+                                                    {#if ssoProvider.kind === SsoProviderKind.Azure}
+                                                        <Fa fw icon={faMicrosoft} />
+                                                    {/if}
+                                                    {#if ssoProvider.kind === SsoProviderKind.Apple}
+                                                        <Fa fw icon={faApple} />
+                                                    {/if}
+                                                </span>
+                                                <span class="auth-option-button-copy">
+                                                    <span class="auth-option-button-title">{ssoProvider.label || ssoProvider.name}</span>
+                                                    <span class="auth-option-button-description">{providerCaption(ssoProvider)}</span>
+                                                </span>
+                                                <span class="auth-option-button-arrow">
+                                                    <Fa icon={faArrowRight} />
+                                                </span>
+                                            </button>
+                                        {/each}
+                                    </div>
+                                </section>
+                            {/if}
+                        {/snippet}
+                    </Loadable>
+                {/if}
+
+                {#if canRevealPasswordLogin()}
+                    <section class="auth-section">
+                        <button
+                            type="button"
+                            class="auth-option-button password-login-link"
+                            disabled={busy}
+                            onclick={() => {
+                                showPasswordLogin = true
+                            }}
+                        >
+                            <span class="auth-option-button-copy">
+                                <span class="auth-option-button-title">Use username and password</span>
+                                <span class="auth-option-button-description">Sign in with a local Warpgate account instead</span>
+                            </span>
+                            <span class="auth-option-button-arrow">
+                                <Fa icon={faArrowRight} />
+                            </span>
+                        </button>
+                    </section>
+                {/if}
+
+                {#if canCancel()}
+                    <div class="auth-footer">
+                        <button
+                            type="button"
+                            class="btn btn-secondary auth-cancel-button"
+                            onclick={cancel}
+                        >
+                            Cancel sign-in
+                        </button>
+                    </div>
+                {/if}
+            </div>
+        </section>
+    </div>
 </Loadable>
 
 <style lang="scss">
-    .login-panel {
+    .auth-shell {
         margin-top: 1.25rem;
     }
 
-    .login-panel :global(.page-summary-bar) {
-        margin-bottom: .85rem;
+    .auth-panel {
+        overflow: hidden;
+        border: 1px solid var(--bs-border-color);
+        border-radius: .75rem;
+        background: var(--bs-body-bg);
+    }
+
+    .auth-panel-header {
+        padding: 1.5rem;
+        border-bottom: 1px solid var(--bs-border-color);
+        background: var(--bs-tertiary-bg);
+    }
+
+    .auth-kicker {
+        margin-bottom: .65rem;
+        color: var(--bs-secondary-color);
+        font-size: .75rem;
+        font-weight: 600;
+        letter-spacing: .04rem;
+        text-transform: uppercase;
+    }
+
+    .auth-panel-header :global(.page-summary-bar) {
+        margin: 0;
+    }
+
+    .auth-panel-header :global(.text-muted) {
+        max-width: 38rem;
+        line-height: 1.45;
+    }
+
+    .auth-meta-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: .75rem;
+        margin-top: 1rem;
+    }
+
+    .auth-meta-card {
+        display: grid;
+        gap: .2rem;
+        min-width: 0;
+        padding: .85rem 1rem;
+        border: 1px solid var(--bs-border-color);
+        border-radius: .5rem;
+        background: var(--bs-body-bg);
+    }
+
+    .auth-meta-label {
+        color: var(--bs-secondary-color);
+        font-size: .72rem;
+        font-weight: 600;
+        letter-spacing: .04rem;
+        text-transform: uppercase;
+    }
+
+    .auth-meta-value {
+        min-width: 0;
+        overflow: hidden;
+        font-weight: 600;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .auth-panel-body {
+        display: grid;
+        gap: 1.25rem;
+        padding: 1.5rem;
+    }
+
+    .auth-feedback {
+        display: grid;
+        gap: .75rem;
+    }
+
+    .auth-feedback :global(.alert) {
+        margin: 0;
+    }
+
+    .auth-section {
+        display: grid;
+        gap: 1rem;
+    }
+
+    .auth-section + .auth-section {
+        padding-top: 1.25rem;
+        border-top: 1px solid var(--bs-border-color);
+    }
+
+    .auth-section-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+    }
+
+    .auth-section-header h2 {
+        margin: 0 0 .25rem;
+        font-size: 1rem;
+        font-weight: 600;
+        line-height: 1.3;
+    }
+
+    .auth-section-header p {
+        margin: 0;
+        color: var(--bs-secondary-color);
+        font-size: .9rem;
+        line-height: 1.45;
+    }
+
+    .auth-form {
+        display: grid;
+        gap: .95rem;
+    }
+
+    .auth-form-otp {
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: start;
+    }
+
+    .auth-form :global(.form-group) {
+        margin-bottom: 0;
+    }
+
+    .auth-form :global(.form-control) {
+        min-height: 2.75rem;
+    }
+
+    .auth-submit-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: .5rem;
+        min-width: 10rem;
+        min-height: 2.75rem;
+    }
+
+    .auth-divider {
+        display: flex;
+        align-items: center;
+        gap: .75rem;
+        color: var(--bs-secondary-color);
+        font-size: .75rem;
+        font-weight: 600;
+        letter-spacing: .04rem;
+        text-transform: uppercase;
+    }
+
+    .auth-divider::before,
+    .auth-divider::after {
+        content: '';
+        flex: 1 1 auto;
+        height: 1px;
+        background: var(--bs-border-color);
+    }
+
+    .auth-option-button {
+        display: flex;
+        align-items: center;
+        gap: .75rem;
+        width: 100%;
+        min-width: 0;
+        padding: .9rem 1rem;
+        border: 1px solid var(--bs-border-color);
+        border-radius: var(--wg-option-radius);
+        background: var(--bs-body-bg);
+        color: var(--bs-body-color);
+        text-align: left;
+        transition:
+            background-color .12s ease-out,
+            border-color .12s ease-out,
+            color .12s ease-out,
+            box-shadow .12s ease-out,
+            transform .08s ease-out;
+    }
+
+    .auth-option-button:hover,
+    .auth-option-button:focus-visible {
+        background: var(--wg-option-hover-bg);
+        color: var(--wg-option-hover-color);
+    }
+
+    .auth-option-button:focus-visible {
+        box-shadow: var(--wg-option-focus-ring);
+        outline: none;
+    }
+
+    .auth-option-button:active {
+        transform: translateY(1px);
+    }
+
+    .auth-option-button-copy {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+    .auth-option-button-title {
+        display: block;
+        min-width: 0;
+        overflow: hidden;
+        font-weight: 600;
+        line-height: 1.3;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .auth-option-button-description {
+        display: block;
+        margin-top: .15rem;
+        color: var(--bs-secondary-color);
+        font-size: .82rem;
+        line-height: 1.35;
+    }
+
+    .auth-option-button-arrow {
+        flex: 0 0 auto;
+        color: var(--bs-secondary-color);
+        font-size: .8rem;
+        opacity: .8;
+    }
+
+    .auth-option-button:hover .auth-option-button-arrow,
+    .auth-option-button:focus-visible .auth-option-button-arrow {
+        color: currentColor;
+        opacity: 1;
     }
 
     .sso-buttons {
-        display: flex;
-        flex-wrap: wrap;
-        gap: .5rem;
+        display: grid;
+        gap: .75rem;
+    }
 
-        button {
-            flex: 1 0 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-width: 12rem;
-            white-space: nowrap;
-        }
+    .sso-button-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+        width: 2rem;
+        height: 2rem;
+        border-radius: .375rem;
+        background: var(--bs-secondary-bg);
+        color: var(--bs-body-color);
+    }
+
+    .auth-footer {
+        display: flex;
+        justify-content: flex-end;
+        padding-top: .25rem;
+    }
+
+    .auth-cancel-button {
+        min-width: 10rem;
     }
 
     @media (max-width: 576px) {
-        .sso-buttons button {
-            flex-basis: 100%;
+        .auth-panel-header,
+        .auth-panel-body {
+            padding: 1.1rem;
+        }
+
+        .auth-meta-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .auth-form-otp {
+            grid-template-columns: 1fr;
+        }
+
+        .auth-submit-button,
+        .auth-cancel-button {
+            width: 100%;
+        }
+
+        .auth-footer {
+            justify-content: stretch;
         }
     }
 </style>
