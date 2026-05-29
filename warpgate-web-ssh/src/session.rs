@@ -62,6 +62,7 @@ pub struct WebSshSession {
     // if the WS stream reconnects
     output_buffer: Arc<Mutex<VecDeque<ServerMessage>>>,
     output_notify: Arc<Notify>,
+    last_error: Arc<Mutex<Option<String>>>,
 
     is_dead: Arc<AtomicBool>,
     disconnect_timer: Arc<Mutex<Option<JoinHandle<()>>>>,
@@ -94,6 +95,7 @@ impl WebSshSession {
             abort_tx: init.abort_tx,
             output_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(OUTPUT_BUFFER_CAPACITY))),
             output_notify: Arc::new(Notify::new()),
+            last_error: Arc::new(Mutex::new(None)),
             is_dead: Arc::new(AtomicBool::new(false)),
             disconnect_timer: Arc::new(Mutex::new(None)),
             channel_counter: Arc::new(AtomicUsize::new(0)),
@@ -104,16 +106,24 @@ impl WebSshSession {
     }
 
     pub async fn push_event(&self, msg: ServerMessage) {
+        if let ServerMessage::Error { message } = &msg {
+            *self.last_error.lock().await = Some(message.clone());
+        }
+
         let mut buf = self.output_buffer.lock().await;
         if buf.len() >= OUTPUT_BUFFER_CAPACITY {
             buf.pop_front();
         }
         buf.push_back(msg);
-        self.output_notify.notify_waiters();
+        self.output_notify.notify_one();
     }
 
     pub async fn drain_buffer_into(&self, out: &mut Vec<ServerMessage>) {
         out.extend(self.output_buffer.lock().await.drain(..));
+    }
+
+    pub async fn last_error(&self) -> Option<String> {
+        self.last_error.lock().await.clone()
     }
 
     pub fn is_dead(&self) -> bool {
@@ -228,7 +238,7 @@ impl WebSshSession {
     pub fn close(&self) {
         self.is_dead
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        self.output_notify.notify_waiters();
+        self.output_notify.notify_one();
     }
 
     pub async fn end_core_session(&self) {

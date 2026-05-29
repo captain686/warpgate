@@ -707,15 +707,16 @@ impl ServerSession {
                         .await
                         ?;
                     }
-                    ConnectionError::Authentication => {
+                    ConnectionError::Authentication { reason } => {
                         let msg = format!(
-                            "{}{}\r\n",
+                            "{}{} {}\r\n",
                             ERASE_PROGRESS_SPINNER,
                             ansi_paint(
                                 Color::Black,
                                 Color::Red,
                                 " ✗ SSH target rejected Warpgate authentication request "
-                            )
+                            ),
+                            reason
                         );
                         let _ = self.emit_pty_output(msg.as_bytes()).await;
                     }

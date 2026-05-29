@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::str::FromStr;
 
 use anyhow::Context;
@@ -5,7 +6,7 @@ use poem::web::Data;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, OpenApi};
 use russh::keys::{Algorithm, PublicKey};
-use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 use uuid::Uuid;
 use warpgate_common::{AdminPermission, WarpgateError};
 use warpgate_common_http::AuthenticatedRequestContext;
@@ -15,6 +16,21 @@ use super::AnySecurityScheme;
 use crate::api::common::require_admin_permission;
 
 pub struct Api;
+
+fn dedupe_known_hosts(hosts: Vec<KnownHost::Model>) -> Vec<KnownHost::Model> {
+    let mut seen = HashSet::new();
+    hosts
+        .into_iter()
+        .filter(|host| {
+            seen.insert((
+                host.host.clone(),
+                host.port,
+                host.key_type.clone(),
+                host.key_base64.clone(),
+            ))
+        })
+        .collect()
+}
 
 #[derive(ApiResponse)]
 enum GetSSHKnownHostsResponse {
@@ -57,6 +73,17 @@ impl Api {
             .context("parsing key")?;
 
         let db = ctx.services().db.lock().await;
+        if let Some(model) = KnownHost::Entity::find()
+            .filter(KnownHost::Column::Host.eq(&body.host))
+            .filter(KnownHost::Column::Port.eq(body.port))
+            .filter(KnownHost::Column::KeyType.eq(&body.key_type))
+            .filter(KnownHost::Column::KeyBase64.eq(&body.key_base64))
+            .one(&*db)
+            .await?
+        {
+            return Ok(AddSshKnownHostResponse::Ok(Json(model)));
+        }
+
         let model = KnownHost::ActiveModel {
             id: Set(Uuid::new_v4()),
             host: Set(body.host.clone()),
@@ -82,7 +109,16 @@ impl Api {
         require_admin_permission(&ctx, Some(AdminPermission::ConfigEdit)).await?;
 
         let db = ctx.services().db.lock().await;
-        let hosts = KnownHost::Entity::find().all(&*db).await?;
-        Ok(GetSSHKnownHostsResponse::Ok(Json(hosts)))
+        let hosts = KnownHost::Entity::find()
+            .order_by_asc(KnownHost::Column::Host)
+            .order_by_asc(KnownHost::Column::Port)
+            .order_by_asc(KnownHost::Column::KeyType)
+            .order_by_asc(KnownHost::Column::KeyBase64)
+            .order_by_asc(KnownHost::Column::Id)
+            .all(&*db)
+            .await?;
+        Ok(GetSSHKnownHostsResponse::Ok(Json(dedupe_known_hosts(
+            hosts,
+        ))))
     }
 }

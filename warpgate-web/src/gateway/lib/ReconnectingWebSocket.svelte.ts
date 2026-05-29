@@ -9,6 +9,7 @@ export interface ReconnectingWebSocketOptions {
     url: string
     onOpen: () => void
     onMessage: (data: string) => void
+    onUnexpectedClose?: () => void
 }
 
 export class ReconnectingWebSocket {
@@ -21,12 +22,14 @@ export class ReconnectingWebSocket {
     private readonly url: string
     private readonly onOpen: () => void
     private readonly onMessage: (data: string) => void
+    private readonly onUnexpectedClose?: () => void
     private readonly maxAttempts = 5
 
     constructor (opts: ReconnectingWebSocketOptions) {
         this.url = opts.url
         this.onOpen = opts.onOpen
         this.onMessage = opts.onMessage
+        this.onUnexpectedClose = opts.onUnexpectedClose
     }
 
     connect (): void {
@@ -54,6 +57,7 @@ export class ReconnectingWebSocket {
                 this.state = ConnectionState.Disconnected
                 return
             }
+            this.onUnexpectedClose?.()
             this.scheduleReconnect()
         })
     }

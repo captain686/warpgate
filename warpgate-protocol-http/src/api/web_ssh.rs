@@ -32,6 +32,8 @@ struct WebSshSessionCreated {
 struct WebSshSessionInfo {
     target_name: String,
     target_kind: TargetKind,
+    closed: bool,
+    last_error: Option<String>,
 }
 
 #[derive(ApiResponse)]
@@ -148,6 +150,8 @@ impl Api {
         Ok(GetWebSshSessionResponse::Ok(Json(WebSshSessionInfo {
             target_name: session.target_name().into(),
             target_kind: *session.target_kind(),
+            closed: session.is_dead(),
+            last_error: session.last_error().await,
         })))
     }
 

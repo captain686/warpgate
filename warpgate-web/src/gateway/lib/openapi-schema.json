@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Warpgate HTTP proxy",
-    "version": "v0.23.4-62-g012f942-modified"
+    "version": "v0.23.4-69-gde781b8-modified"
   },
   "servers": [
     {
@@ -2455,7 +2455,8 @@
         "title": "WebSshSessionInfo",
         "required": [
           "target_name",
-          "target_kind"
+          "target_kind",
+          "closed"
         ],
         "properties": {
           "target_name": {
@@ -2463,6 +2464,12 @@
           },
           "target_kind": {
             "$ref": "#/components/schemas/TargetKind"
+          },
+          "closed": {
+            "type": "boolean"
+          },
+          "last_error": {
+            "type": "string"
           }
         }
       }

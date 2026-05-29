@@ -68,6 +68,18 @@ impl KnownHosts {
         };
 
         let db = self.db.lock().await;
+        if KnownHost::Entity::find()
+            .filter(KnownHost::Column::Host.eq(host))
+            .filter(KnownHost::Column::Port.eq(i32::from(port)))
+            .filter(KnownHost::Column::KeyType.eq(key.algorithm().as_str()))
+            .filter(KnownHost::Column::KeyBase64.eq(key.public_key_base64()))
+            .one(&*db)
+            .await?
+            .is_some()
+        {
+            return Ok(());
+        }
+
         values.insert(&*db).await?;
 
         Ok(())

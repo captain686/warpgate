@@ -56,6 +56,7 @@ mod m00051_log_max_age;
 mod m00052_admin_manage_admin_users;
 mod m00053_fix_public_key_lifecycle_dates;
 mod m00054_target_ssh_cert;
+mod m00055_dedupe_known_hosts;
 
 pub struct Migrator;
 
@@ -117,6 +118,7 @@ impl MigratorTrait for Migrator {
             Box::new(m00052_admin_manage_admin_users::Migration),
             Box::new(m00053_fix_public_key_lifecycle_dates::Migration),
             Box::new(m00054_target_ssh_cert::Migration),
+            Box::new(m00055_dedupe_known_hosts::Migration),
         ]
     }
 }

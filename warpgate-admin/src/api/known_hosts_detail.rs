@@ -1,7 +1,7 @@
 use poem::web::Data;
 use poem_openapi::param::Path;
 use poem_openapi::{ApiResponse, OpenApi};
-use sea_orm::{EntityTrait, ModelTrait};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use uuid::Uuid;
 use warpgate_common::{AdminPermission, WarpgateError};
 use warpgate_common_http::AuthenticatedRequestContext;
@@ -41,7 +41,13 @@ impl Api {
 
         match known_host {
             Some(known_host) => {
-                known_host.delete(&*db).await?;
+                KnownHost::Entity::delete_many()
+                    .filter(KnownHost::Column::Host.eq(&known_host.host))
+                    .filter(KnownHost::Column::Port.eq(known_host.port))
+                    .filter(KnownHost::Column::KeyType.eq(&known_host.key_type))
+                    .filter(KnownHost::Column::KeyBase64.eq(&known_host.key_base64))
+                    .exec(&*db)
+                    .await?;
                 Ok(DeleteSSHKnownHostResponse::Deleted)
             }
             None => Ok(DeleteSSHKnownHostResponse::NotFound),

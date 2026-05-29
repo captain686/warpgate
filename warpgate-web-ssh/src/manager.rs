@@ -22,6 +22,7 @@ use crate::protocol::ServerMessage;
 use crate::session::{WebSshSession, WebSshSessionHandle, WebSshSessionInit};
 
 const MAX_SESSIONS_PER_USER: usize = 100;
+const CLOSED_SESSION_RETENTION: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[derive(Default)]
 pub struct WebSshClientManager {
@@ -295,7 +296,11 @@ fn spawn_event_loop(
                             session.end_core_session().await;
                             session.stop_all_recordings().await;
                             session.close();
-                            sessions.lock().await.remove(&session.id());
+                            let sessions = sessions.clone();
+                            tokio::spawn(async move {
+                                tokio::time::sleep(CLOSED_SESSION_RETENTION).await;
+                                sessions.lock().await.remove(&session_id);
+                            });
                             break;
                         }
                         _ => {}

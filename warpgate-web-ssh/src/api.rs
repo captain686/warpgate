@@ -35,14 +35,6 @@ pub async fn ws_handler(
         ));
     }
 
-    if session.is_dead() {
-        manager.remove_session(session_id).await;
-        return Err(poem::Error::from_string(
-            "Session not found",
-            StatusCode::NOT_FOUND,
-        ));
-    }
-
     session.cancel_disconnect_timer().await;
 
     let manager = (*manager).clone();
@@ -53,61 +45,52 @@ pub async fn ws_handler(
         let mut client_closed = false;
         let mut pending_events = Vec::with_capacity(crate::session::OUTPUT_BUFFER_CAPACITY);
 
-        // drain buffered events first (in case of a reconnect)
-        session.drain_buffer_into(&mut pending_events).await;
-        let mut socket_failed = false;
-        for msg in pending_events.drain(..) {
-            if let Ok(json) = serde_json::to_string(&msg) {
-                if sink.send(Message::Text(json)).await.is_err() {
-                    socket_failed = true;
-                    break;
-                }
-            }
-        }
         let mut keepalive = tokio::time::interval(Duration::from_secs(30));
         keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         keepalive.tick().await; // consume the immediate first tick
 
-        if !socket_failed {
-            'socket: loop {
-                tokio::select! {
-                    _ = session.wait_buffer() => {
-                        session.drain_buffer_into(&mut pending_events).await;
-                        for msg in pending_events.drain(..) {
-                            if let Ok(json) = serde_json::to_string(&msg)
-                                && sink.send(Message::Text(json)).await.is_err() {
-                                break 'socket;
-                            }
-                        }
-                        if session.is_dead() {
-                            break;
-                        }
-                    }
+        'socket: loop {
+            session.drain_buffer_into(&mut pending_events).await;
+            for msg in pending_events.drain(..) {
+                if let Ok(json) = serde_json::to_string(&msg)
+                    && sink.send(Message::Text(json)).await.is_err()
+                {
+                    break 'socket;
+                }
+            }
 
-                    maybe_msg = stream.next() => {
-                        match maybe_msg {
-                            Some(Ok(Message::Text(text))) => {
-                                if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text)
-                                    && let Some(reply) = handle_client_message(&session, &db, client_msg).await
-                                    && let Ok(json) = serde_json::to_string(&reply)
-                                    && sink.send(Message::Text(json)).await.is_err()
-                                {
-                                    break;
-                                }
-                            }
-                            Some(Ok(Message::Close(_))) => {
-                                client_closed = true;
+            if session.is_dead() {
+                break;
+            }
+
+            tokio::select! {
+                _ = session.wait_buffer() => {
+                    continue;
+                }
+
+                maybe_msg = stream.next() => {
+                    match maybe_msg {
+                        Some(Ok(Message::Text(text))) => {
+                            if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text)
+                                && let Some(reply) = handle_client_message(&session, &db, client_msg).await
+                                && let Ok(json) = serde_json::to_string(&reply)
+                                && sink.send(Message::Text(json)).await.is_err()
+                            {
                                 break;
                             }
-                            None => break,
-                            _ => {}
                         }
-                    }
-
-                    _ = keepalive.tick() => {
-                        if sink.send(Message::Ping(vec![])).await.is_err() {
+                        Some(Ok(Message::Close(_))) => {
+                            client_closed = true;
                             break;
                         }
+                        None => break,
+                        _ => {}
+                    }
+                }
+
+                _ = keepalive.tick() => {
+                    if sink.send(Message::Ping(vec![])).await.is_err() {
+                        break;
                     }
                 }
             }

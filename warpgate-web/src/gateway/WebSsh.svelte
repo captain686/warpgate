@@ -56,6 +56,7 @@
 
     let sessionInfo = $state<WebSshSessionInfo | null>(null)
     let sessionDeleteStarted = false
+    const errorStorageKey = `warpgateWebSSHError:${sessionId}`
 
     const FONT_SIZE_MIN = 8
     const FONT_SIZE_MAX = 32
@@ -80,10 +81,43 @@
         url: `wss://${location.host}/@warpgate/api/web-ssh/sessions/${sessionId}/stream`,
         onOpen: () => requestNewChannel(),
         onMessage: data => onMessage(JSON.parse(data) as ServerMessage),
+        onUnexpectedClose: () => { void syncSessionStateAfterDisconnect() },
     })
 
     function sessionApiUrl (): string {
         return `/@warpgate/api/web-ssh/sessions/${sessionId}`
+    }
+
+    function rememberConnectionError (message: string) {
+        connectionError = message
+        try {
+            sessionStorage.setItem(errorStorageKey, message)
+        } catch {
+            // best effort
+        }
+    }
+
+    function getRememberedConnectionError (): string | null {
+        try {
+            return sessionStorage.getItem(errorStorageKey)
+        } catch {
+            return null
+        }
+    }
+
+    function applyClosedSessionFallback () {
+        const rememberedError = getRememberedConnectionError()
+        if (rememberedError) {
+            sessionNotFound = false
+            ws.state = ConnectionState.Error
+            connectionError = rememberedError
+            return
+        }
+
+        if (!connectionError) {
+            ws.state = ConnectionState.Disconnected
+            connectionError = 'Session closed.'
+        }
     }
 
     function deleteSessionKeepalive () {
@@ -163,18 +197,82 @@
             }
             case 'error':
                 ws.state = ConnectionState.Error
-                connectionError = msg.message
+                rememberConnectionError(msg.message)
+                writeTerminalNotice(msg.message)
                 break
             case 'session_closed':
                 sessionDeleteStarted = true
-                ws.close()
-                ws.state = ConnectionState.Disconnected
-                connectionError = 'Session closed.'
+                void (async () => {
+                    await syncClosedSessionState()
+                    ws.close()
+                })()
                 break
             case 'host_key_unknown':
                 pendingHostKey = msg
                 break
         }
+    }
+
+    function writeTerminalNotice (message: string) {
+        const text = `\r\n${message}\r\n`
+        for (const id of channelOrder) {
+            tabs[id]?.write(Uint8Array.from(text, c => c.charCodeAt(0)))
+        }
+    }
+
+    async function syncClosedSessionState () {
+        try {
+            sessionInfo = await api.getWebSshSession({ sessionId })
+        } catch (e) {
+            if (e instanceof ResponseError && e.response.status === 404 && !getRememberedConnectionError()) {
+                sessionNotFound = true
+            }
+            applyClosedSessionFallback()
+            return
+        }
+
+        if (sessionInfo.lastError) {
+            ws.state = ConnectionState.Error
+            const previousError = connectionError
+            rememberConnectionError(sessionInfo.lastError)
+            if (previousError !== sessionInfo.lastError) {
+                writeTerminalNotice(sessionInfo.lastError)
+            }
+            return
+        }
+
+        applyClosedSessionFallback()
+    }
+
+    async function syncSessionStateAfterDisconnect () {
+        if (sessionDeleteStarted) {
+            return
+        }
+
+        try {
+            sessionInfo = await api.getWebSshSession({ sessionId })
+        } catch {
+            applyClosedSessionFallback()
+            return
+        }
+
+        if (!sessionInfo.closed && !sessionInfo.lastError) {
+            return
+        }
+
+        ws.close()
+
+        if (sessionInfo.lastError) {
+            ws.state = ConnectionState.Error
+            const previousError = connectionError
+            rememberConnectionError(sessionInfo.lastError)
+            if (previousError !== sessionInfo.lastError) {
+                writeTerminalNotice(sessionInfo.lastError)
+            }
+            return
+        }
+
+        applyClosedSessionFallback()
     }
 
     function openChannel (id: string) {
@@ -243,10 +341,19 @@
         try {
             sessionInfo = await api.getWebSshSession({ sessionId })
         } catch (e) {
-            connectionError = e instanceof Error ? e.message : 'Failed to load session info'
-            if (e instanceof ResponseError && e.response.status === 404) {
+            const rememberedError = getRememberedConnectionError()
+            connectionError = rememberedError ?? (e instanceof Error ? e.message : 'Failed to load session info')
+            if (e instanceof ResponseError && e.response.status === 404 && !rememberedError) {
                 sessionNotFound = true
             }
+            return
+        }
+        if (sessionInfo.lastError) {
+            ws.state = ConnectionState.Error
+            rememberConnectionError(sessionInfo.lastError)
+        }
+        if (sessionInfo.closed) {
+            applyClosedSessionFallback()
             return
         }
         ws.connect()
@@ -294,19 +401,23 @@
                 />
             {/if}
         {/each}
+
+        {#if connectionError}
+            <div class="terminal-error-panel">
+                <div class="terminal-error-content">
+                    <InfoBox variant="warning" class="m-0">
+                        {#if sessionNotFound}
+                            Session not found. It may have expired or been closed.
+                        {:else}
+                            {connectionError}
+                        {/if}
+                    </InfoBox>
+                </div>
+            </div>
+        {/if}
     </div>
 
-    {#if connectionError}
-        <div class="mx-3 mt-3">
-            <InfoBox variant="warning">
-                {#if sessionNotFound}
-                    Session not found. It may have expired or been closed.
-                {:else}
-                    {connectionError}
-                {/if}
-            </InfoBox>
-        </div>
-    {:else}
+    {#if !connectionError}
         <div class="toolbar d-flex align-items-center gap-2 p-2">
             <div class="tab-bar d-flex align-items-stretch gap-2 flex-grow-1">
                 {#each channelOrder as id (id)}
@@ -456,6 +567,26 @@
 
     .terminal-area {
         overflow: hidden;
+    }
+
+    .terminal-error-panel {
+        position: absolute;
+        inset: 0;
+        z-index: 5;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        background: rgba(0, 0, 0, .82);
+    }
+
+    .terminal-error-content {
+        width: min(46rem, 100%);
+        padding: 1rem 1.25rem;
+        border: 1px solid rgba(255, 193, 7, .32);
+        border-radius: 6px;
+        background: rgba(18, 18, 18, .96);
+        box-shadow: 0 12px 36px rgba(0, 0, 0, .35);
     }
 
     .tab {

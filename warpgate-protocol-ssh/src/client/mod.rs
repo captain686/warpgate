@@ -69,8 +69,8 @@ pub enum ConnectionError {
     #[error("Aborted")]
     Aborted,
 
-    #[error("Authentication failed")]
-    Authentication,
+    #[error("Authentication failed: {reason}")]
+    Authentication { reason: String },
 }
 
 #[derive(Debug)]
@@ -701,21 +701,7 @@ impl RemoteClient {
         loop {
             tokio::select! {
                 Some(event) = event_rx.recv() => {
-                    match event {
-                        ClientHandlerEvent::HostKeyReceived(key) => {
-                            if !is_jump_host {
-                                self.tx.send(RCEvent::HostKeyReceived(key)).await.map_err(|_| ConnectionError::Internal)?;
-                            }
-                        }
-                        ClientHandlerEvent::HostKeyUnknown(key, reply) => {
-                            if is_jump_host {
-                                let _ = reply.send(true);
-                            } else {
-                                self.tx.send(RCEvent::HostKeyUnknown(key, reply)).await.map_err(|_| ConnectionError::Internal)?;
-                            }
-                        }
-                        _ => {}
-                    }
+                    self.forward_connection_event(event, is_jump_host).await?;
                 }
                 Some(()) = self.abort_rx.recv() => {
                     info!("Abort requested");
@@ -736,6 +722,10 @@ impl RemoteClient {
                         }
                     };
 
+                    while let Ok(event) = event_rx.try_recv() {
+                        self.forward_connection_event(event, is_jump_host).await?;
+                    }
+
                     self.authenticate_session(
                         &mut session,
                         &ssh_options.host,
@@ -748,6 +738,35 @@ impl RemoteClient {
                 }
             }
         }
+    }
+
+    async fn forward_connection_event(
+        &mut self,
+        event: ClientHandlerEvent,
+        is_jump_host: bool,
+    ) -> Result<(), ConnectionError> {
+        match event {
+            ClientHandlerEvent::HostKeyReceived(key) => {
+                if !is_jump_host {
+                    self.tx
+                        .send(RCEvent::HostKeyReceived(key))
+                        .await
+                        .map_err(|_| ConnectionError::Internal)?;
+                }
+            }
+            ClientHandlerEvent::HostKeyUnknown(key, reply) => {
+                if is_jump_host {
+                    let _ = reply.send(true);
+                } else {
+                    self.tx
+                        .send(RCEvent::HostKeyUnknown(key, reply))
+                        .await
+                        .map_err(|_| ConnectionError::Internal)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     async fn authenticate_session(
@@ -912,7 +931,7 @@ impl RemoteClient {
             let _ = session
                 .disconnect(russh::Disconnect::ByApplication, "", "")
                 .await;
-            return Err(ConnectionError::Authentication);
+            return Err(ConnectionError::Authentication { reason });
         }
 
         Ok(())

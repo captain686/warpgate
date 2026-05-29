@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use poem::web::Data;
 use poem_openapi::payload::{Json, PlainText};
 use poem_openapi::{ApiResponse, Object, OpenApi};
@@ -13,6 +15,8 @@ use super::AnySecurityScheme;
 use crate::api::common::require_admin_permission;
 
 pub struct Api;
+
+const CHECK_SSH_HOST_KEY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Object)]
 struct CheckSshHostKeyRequest {
@@ -54,29 +58,43 @@ impl Api {
         require_admin_permission(&ctx, Some(AdminPermission::TargetsEdit)).await?;
 
         let mut handles = RemoteClient::create(Uuid::new_v4(), ctx.services().clone())?;
+        let abort_tx = handles.abort_tx.clone();
 
-        let _ = handles.command_tx.send((
-            RCCommand::Connect(TargetSSHOptions {
-                host: body.host.clone(),
-                port: body.port,
-                username: body.username.clone().unwrap_or_default(),
-                allow_insecure_algos: body.allow_insecure_algos,
-                auth: body.auth.clone().unwrap_or_else(|| {
-                    SSHTargetAuth::Password(SshTargetPasswordAuth {
-                        password: String::new().into(),
-                    })
+        if handles
+            .command_tx
+            .send((
+                RCCommand::Connect(TargetSSHOptions {
+                    host: body.host.clone(),
+                    port: body.port,
+                    username: body.username.clone().unwrap_or_default(),
+                    allow_insecure_algos: body.allow_insecure_algos,
+                    auth: body.auth.clone().unwrap_or_else(|| {
+                        SSHTargetAuth::Password(SshTargetPasswordAuth {
+                            password: String::new().into(),
+                        })
+                    }),
+                    jump_host: body.jump_host.clone(),
                 }),
-                jump_host: body.jump_host.clone(),
-            }),
-            None,
-        ));
+                None,
+            ))
+            .await
+            .is_err()
+        {
+            return Ok(CheckSshHostKeyResponse::Error(PlainText(
+                "Failed to start SSH host key check".to_string(),
+            )));
+        }
 
         let fut = async move {
             let key = loop {
                 match handles.event_rx.recv().await {
-                    Some(RCEvent::HostKeyReceived(key)) => break key,
+                    Some(RCEvent::HostKeyReceived(key)) => {
+                        let _ = handles.abort_tx.send(());
+                        break key;
+                    }
                     Some(RCEvent::HostKeyUnknown(key, reply)) => {
-                        let _ = reply.send(true);
+                        let _ = reply.send(false);
+                        let _ = handles.abort_tx.send(());
                         break key;
                     }
                     Some(RCEvent::ConnectionError(err)) => return Err(anyhow::Error::from(err)),
@@ -90,14 +108,20 @@ impl Api {
 
         // Result is matched manually since we need to manually format
         // the error message with :# to included the nested errors here
-        match fut.await {
-            Ok(key) => Ok(CheckSshHostKeyResponse::Ok(Json(
+        match tokio::time::timeout(CHECK_SSH_HOST_KEY_TIMEOUT, fut).await {
+            Err(_) => {
+                let _ = abort_tx.send(());
+                Ok(CheckSshHostKeyResponse::Error(PlainText(
+                    "Timed out while retrieving remote host key".to_string(),
+                )))
+            }
+            Ok(Ok(key)) => Ok(CheckSshHostKeyResponse::Ok(Json(
                 CheckSshHostKeyResponseBody {
                     remote_key_type: key.algorithm().as_str().into(),
                     remote_key_base64: key.public_key_base64(),
                 },
             ))),
-            Err(err) => Ok(CheckSshHostKeyResponse::Error(PlainText(format!(
+            Ok(Err(err)) => Ok(CheckSshHostKeyResponse::Error(PlainText(format!(
                 "{err:#}"
             )))),
         }

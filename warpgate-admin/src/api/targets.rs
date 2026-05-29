@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use poem::web::Data;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
@@ -18,6 +20,21 @@ use warpgate_db_entities::{KnownHost, Role, Target, TargetRoleAssignment, Ticket
 
 use super::AnySecurityScheme;
 use crate::api::common::{case_insensitive_search, require_admin_permission};
+
+fn dedupe_known_hosts(hosts: Vec<KnownHost::Model>) -> Vec<KnownHost::Model> {
+    let mut seen = HashSet::new();
+    hosts
+        .into_iter()
+        .filter(|host| {
+            seen.insert((
+                host.host.clone(),
+                host.port,
+                host.key_type.clone(),
+                host.key_base64.clone(),
+            ))
+        })
+        .collect()
+}
 
 #[derive(Object)]
 struct TargetDataRequest {
@@ -371,10 +388,15 @@ impl DetailApi {
                     .eq(&options.host)
                     .and(KnownHost::Column::Port.eq(options.port)),
             )
+            .order_by_asc(KnownHost::Column::KeyType)
+            .order_by_asc(KnownHost::Column::KeyBase64)
+            .order_by_asc(KnownHost::Column::Id)
             .all(&*db)
             .await?;
 
-        Ok(TargetKnownSshHostKeysResponse::Found(Json(known_hosts)))
+        Ok(TargetKnownSshHostKeysResponse::Found(Json(
+            dedupe_known_hosts(known_hosts),
+        )))
     }
 }
 

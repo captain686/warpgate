@@ -13,7 +13,7 @@ impl MigrationName for Migration {
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
+        let alter_result = manager
             .alter_table(
                 Table::alter()
                     .table(admin_role::Entity)
@@ -25,7 +25,13 @@ impl MigrationTrait for Migration {
                     )
                     .to_owned(),
             )
-            .await?;
+            .await;
+
+        if let Err(error) = alter_result
+            && !is_duplicate_column_error(&error)
+        {
+            return Err(error);
+        }
 
         let conn = manager.get_connection();
         let bool_true = match manager.get_database_backend() {
@@ -50,4 +56,10 @@ impl MigrationTrait for Migration {
             )
             .await
     }
+}
+
+fn is_duplicate_column_error(error: &DbErr) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("duplicate column name")
+        || (message.contains("already exists") && message.contains("users_manage_admins"))
 }
