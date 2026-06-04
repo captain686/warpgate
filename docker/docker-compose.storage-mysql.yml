@@ -1,0 +1,49 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-warpgate}
+      MYSQL_USER: ${MYSQL_USER:-warpgate}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-warpgate}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-me}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+  warpgate:
+    image: ghcr.io/captain686/warpgate
+    depends_on:
+      mysql:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -lc
+    command: >
+      set -eu;
+      if [ ! -f /data/warpgate.yaml ]; then
+        warpgate unattended-setup
+        --data-path /data
+        --database-url "mysql://${MYSQL_USER:-warpgate}:${MYSQL_PASSWORD:-warpgate}@mysql:3306/${MYSQL_DATABASE:-warpgate}"
+        --http-port 8888
+        --ssh-port 2222
+        --external-host "${WARPGATE_EXTERNAL_HOST:-localhost}";
+      fi;
+      exec warpgate run
+    environment:
+      WARPGATE_ADMIN_PASSWORD: ${WARPGATE_ADMIN_PASSWORD:-change-me}
+    ports:
+      - 2222:2222
+      - 8888:8888
+      - 33306:33306
+    volumes:
+      - ./data-mysql:/data
+
+volumes:
+  mysql-data:

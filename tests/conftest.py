@@ -342,10 +342,11 @@ class ProcessManager:
 
     def start_k3s(self) -> K3sInstance:
         """
-        Runs a privileged k3s container, waits for the API to be ready,
-        creates a ServiceAccount and clusterrolebinding, then uses
-        `kubectl create token` to fetch the bearer token. Assumes a modern
-        k8s version (no fallback logic needed).
+        Runs a privileged k3s container, waits for the control plane and
+        pod networking to become usable, creates a ServiceAccount and
+        clusterrolebinding, then uses `kubectl create token` to fetch the
+        bearer token. Assumes a modern k8s version (no fallback logic
+        needed).
         """
         port = alloc_port()
         container_name = f"warpgate-e2e-k3s-{uuid.uuid4()}"
@@ -369,31 +370,34 @@ class ProcessManager:
             ]
         )
 
-        def wait_k3s():
-            # Wait until kube-apiserver is responding
+        def wait_k3s_node():
+            # `kubectl get nodes` returns 0 before any nodes are registered,
+            # so require an actual Ready node before proceeding.
             while True:
-                try:
-                    subprocess.check_call(
-                        [
-                            "docker",
-                            "exec",
-                            container_name,
-                            "kubectl",
-                            "get",
-                            "nodes",
-                        ],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
+                ready = subprocess.run(
+                    [
+                        "docker",
+                        "exec",
+                        container_name,
+                        "kubectl",
+                        "wait",
+                        "--for=condition=Ready",
+                        "node",
+                        "--all",
+                        "--timeout=5s",
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                if ready.returncode == 0:
                     break
-                except subprocess.CalledProcessError:
-                    time.sleep(1)
+                time.sleep(1)
 
-        _wait_timeout(wait_k3s, "k3s API is not ready", timeout=self.timeout * 5)
+        _wait_timeout(wait_k3s_node, "k3s node is not ready", timeout=self.timeout * 5)
 
-        # k3s sometimes returns OK for `get nodes` before namespace controller
-        # has created the "default" namespace.  make sure it exists before we
-        # try to create objects inside it.
+        # k3s sometimes returns a Ready node before namespace controller has
+        # created the default namespace. Make sure it exists before we create
+        # objects inside it.
         def wait_default_ns():
             while True:
                 r = subprocess.run(
@@ -409,13 +413,39 @@ class ProcessManager:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-                if r.returncode:
-                    time.sleep(1)
-                else:
+                if r.returncode == 0:
                     break
+                time.sleep(1)
 
         _wait_timeout(
             wait_default_ns, "default namespace is not ready", timeout=self.timeout * 5
+        )
+
+        def wait_flannel_network():
+            # On GitHub Actions the API and node can report ready before k3s
+            # has written the flannel subnet file, which makes early pod
+            # creation fail with `failed to load flannel subnet.env`.
+            while True:
+                ready = subprocess.run(
+                    [
+                        "docker",
+                        "exec",
+                        container_name,
+                        "sh",
+                        "-lc",
+                        "test -s /run/flannel/subnet.env",
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                if ready.returncode == 0:
+                    break
+                time.sleep(1)
+
+        _wait_timeout(
+            wait_flannel_network,
+            "k3s pod networking is not ready",
+            timeout=self.timeout * 5,
         )
 
         # Create service account inside the container

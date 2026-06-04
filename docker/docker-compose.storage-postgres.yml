@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-warpgate}
+      POSTGRES_USER: ${POSTGRES_USER:-warpgate}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-warpgate}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -h 127.0.0.1 -U $$POSTGRES_USER -d $$POSTGRES_DB
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  warpgate:
+    image: ghcr.io/captain686/warpgate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -lc
+    command: >
+      set -eu;
+      if [ ! -f /data/warpgate.yaml ]; then
+        warpgate unattended-setup
+        --data-path /data
+        --database-url "postgres://${POSTGRES_USER:-warpgate}:${POSTGRES_PASSWORD:-warpgate}@postgres:5432/${POSTGRES_DB:-warpgate}"
+        --http-port 8888
+        --ssh-port 2222
+        --external-host "${WARPGATE_EXTERNAL_HOST:-localhost}";
+      fi;
+      exec warpgate run
+    environment:
+      WARPGATE_ADMIN_PASSWORD: ${WARPGATE_ADMIN_PASSWORD:-change-me}
+    ports:
+      - 2222:2222
+      - 8888:8888
+      - 33306:33306
+    volumes:
+      - ./data-postgres:/data
+
+volumes:
+  postgres-data:

@@ -46,6 +46,8 @@ Warpgate is a smart & fully transparent SSH, HTTPS, Kubernetes, MySQL, PostgreSQ
 * See the [Getting started](https://warpgate.null.page/getting-started/) docs page (or [Getting started on Docker](https://warpgate.null.page/getting-started-on-docker/)).
 * [Release / beta binaries](https://github.com/captain686/warpgate/releases)
 * [Nightly builds](https://nightly.link/captain686/warpgate/workflows/build/main)
+* Docker Compose examples live under [`docker/`](./docker/):
+  `docker-compose.yml` (SQLite), `docker-compose.storage-mysql.yml`, and `docker-compose.storage-postgres.yml`
 
 ## How is Warpgate different from a jump host / VPN / Teleport?
 

@@ -566,6 +566,7 @@
     }
 
     .terminal-area {
+        min-height: 0;
         overflow: hidden;
     }
 

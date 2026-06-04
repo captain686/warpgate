@@ -34,28 +34,71 @@
     })
 </script>
 
-<div class="page-summary-bar">
-    <h1>session recording</h1>
+<div class="recording-page">
+    <div class="page-summary-bar">
+        <h1>session recording</h1>
+    </div>
+
+    {#if !recording && !error}
+        <DelayedSpinner />
+    {/if}
+
+    {#if error}
+    <Alert color="danger">{error}</Alert>
+    {/if}
+
+    {#if recording?.kind === RecordingKind.Traffic}
+        <a href={getTCPDumpURL()}>Download tcpdump file</a>
+    {/if}
+    {#if recording?.kind === RecordingKind.Terminal}
+        <div class="recording-player">
+            <TerminalRecordingPlayer recording={recording} />
+        </div>
+    {/if}
+    {#if recording?.kind === RecordingKind.Kubernetes}
+        <Loadable promise={api.getKubernetesRecording({ id: recording.id })}>
+            {#snippet children(items)}
+                <KubernetesRecording items={items} />
+            {/snippet}
+        </Loadable>
+    {/if}
 </div>
 
-{#if !recording && !error}
-    <DelayedSpinner />
-{/if}
+<style lang="scss">
+    .recording-page {
+        box-sizing: border-box;
+        display: flex;
+        flex: 1 1 auto;
+        flex-direction: column;
+        gap: .75rem;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        min-width: 0;
+        max-width: 100%;
+        max-height: 100%;
+        overflow: hidden;
+    }
 
-{#if error}
-<Alert color="danger">{error}</Alert>
-{/if}
+    .recording-page :global(.page-summary-bar) {
+        flex: none;
+        margin-bottom: 0;
+    }
 
-{#if recording?.kind === RecordingKind.Traffic}
-    <a href={getTCPDumpURL()}>Download tcpdump file</a>
-{/if}
-{#if recording?.kind === RecordingKind.Terminal}
-    <TerminalRecordingPlayer recording={recording} />
-{/if}
-{#if recording?.kind === RecordingKind.Kubernetes}
-    <Loadable promise={api.getKubernetesRecording({ id: recording.id })}>
-        {#snippet children(items)}
-            <KubernetesRecording items={items} />
-        {/snippet}
-    </Loadable>
-{/if}
+    .recording-player {
+        display: flex;
+        flex: 1 1 auto;
+        height: 0;
+        min-height: 0;
+        min-width: 0;
+        max-width: 100%;
+        max-height: 100%;
+        overflow: hidden;
+    }
+
+    .recording-player :global(.root) {
+        flex: 1 1 auto;
+        min-height: 0;
+        min-width: 0;
+    }
+</style>

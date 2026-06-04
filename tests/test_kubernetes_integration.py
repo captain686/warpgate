@@ -19,6 +19,64 @@ def run_kubectl(args, **kwargs):
     )
 
 
+def wait_for_pod_phase(
+    k3s: K3sInstance,
+    pod_name: str,
+    *,
+    namespace: str = "default",
+    phase: bytes = b"Running",
+    timeout: int = 240,
+):
+    last_phase = b""
+    for _ in range(timeout):
+        result = k3s.kubectl(
+            [
+                "get",
+                "pod",
+                pod_name,
+                "-n",
+                namespace,
+                "-o",
+                "jsonpath={.status.phase}",
+            ],
+            check=False,
+        )
+        last_phase = result.stdout.strip()
+        if last_phase == phase:
+            return
+        time.sleep(1)
+
+    waiting_reason = k3s.kubectl(
+        [
+            "get",
+            "pod",
+            pod_name,
+            "-n",
+            namespace,
+            "-o",
+            "jsonpath={.status.containerStatuses[0].state.waiting.reason}",
+        ],
+        check=False,
+    ).stdout.strip()
+    waiting_message = k3s.kubectl(
+        [
+            "get",
+            "pod",
+            pod_name,
+            "-n",
+            namespace,
+            "-o",
+            "jsonpath={.status.containerStatuses[0].state.waiting.message}",
+        ],
+        check=False,
+    ).stdout.strip()
+    raise AssertionError(
+        f"pod {pod_name} did not reach {phase.decode()} within {timeout}s: "
+        f"phase={last_phase!r}, waiting_reason={waiting_reason!r}, "
+        f"waiting_message={waiting_message!r}"
+    )
+
+
 class TestKubernetesIntegration:
     @pytest.mark.asyncio
     async def test_kubectl_through_warpgate(
@@ -251,6 +309,7 @@ class TestKubernetesIntegration:
             "kubectl",
             "run",
             "-v9",
+            "--pod-running-timeout=3m",
             "--server",
             server,
             "--insecure-skip-tls-verify",
@@ -270,7 +329,7 @@ class TestKubernetesIntegration:
         p = run_kubectl(
             run_cmd,
             input=b"hello-from-run\n",
-            timeout=120,
+            timeout=240,
         )
         assert p.returncode == 0, f"kubectl run should succeed: {p.stderr!r}"
         assert b"hello-from-run" in p.stdout, (
@@ -451,27 +510,7 @@ class TestKubernetesIntegration:
         )
         k3s.kubectl(["apply", "-f", "-"], input=pod_yaml.encode())
 
-        # wait for the pod to be Running
-        for _ in range(120):
-            r = k3s.kubectl(
-                [
-                    "get",
-                    "pod",
-                    pod_name,
-                    "-n",
-                    "default",
-                    "-o",
-                    "jsonpath={.status.phase}",
-                ],
-                check=False,
-            )
-            if r.stdout.strip() == b"Running":
-                break
-            time.sleep(1)
-        else:
-            raise AssertionError(
-                f"pod {pod_name} did not reach Running: {r.stdout!r} {r.stderr!r}"
-            )
+        wait_for_pod_phase(k3s, pod_name)
 
         # --- kubectl exec: send stdin and read stdout ---
         p = run_kubectl(
@@ -579,27 +618,7 @@ class TestKubernetesIntegration:
         )
         k3s.kubectl(["apply", "-f", "-"], input=pod_yaml.encode())
 
-        # wait for the pod to be Running
-        for _ in range(120):
-            r = k3s.kubectl(
-                [
-                    "get",
-                    "pod",
-                    pod_name,
-                    "-n",
-                    "default",
-                    "-o",
-                    "jsonpath={.status.phase}",
-                ],
-                check=False,
-            )
-            if r.stdout.strip() == b"Running":
-                break
-            time.sleep(1)
-        else:
-            raise AssertionError(
-                f"pod {pod_name} did not reach Running: {r.stdout!r} {r.stderr!r}"
-            )
+        wait_for_pod_phase(k3s, pod_name)
 
         # --- kubectl attach: send stdin and read stdout ---
         p = run_kubectl(

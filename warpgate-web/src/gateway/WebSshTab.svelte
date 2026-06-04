@@ -334,8 +334,16 @@
     @import "../../node_modules/@xterm/xterm/css/xterm.css";
 
     :global(.xterm) {
+        box-sizing: border-box;
         height: 100%;
+        overflow: hidden;
         padding: 7px 10px;
+    }
+
+    :global(.xterm-screen) {
+        height: 100% !important;
+        max-height: 100%;
+        overflow: hidden;
     }
 
     :global(.xterm-viewport) {

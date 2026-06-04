@@ -19,6 +19,16 @@
 
     const initPromise = init()
     let fullScreenRoute = $derived($routeLocation.startsWith('/gateway/web-ssh/'))
+    let recordingRoute = $derived($routeLocation.startsWith('/recordings/'))
+    let appLayoutClass = $derived.by(() => {
+        if (fullScreenRoute) {
+            return 'fullscreen'
+        }
+        if (recordingRoute) {
+            return 'recording-layout'
+        }
+        return 'container-lg'
+    })
 
     async function requireLogin (detail: RouteDetail) {
         await initPromise
@@ -100,7 +110,7 @@
 </script>
 
 <Loadable promise={initPromise}>
-    <div class="app {fullScreenRoute ? 'fullscreen' : 'container-lg'}">
+    <div class="app {appLayoutClass}">
         {#if !fullScreenRoute}
         <header>
             <a href="/@warpgate" class="d-flex logo-link me-4">
@@ -147,9 +157,39 @@
         flex-direction: column;
     }
 
+    .app:not(.fullscreen) {
+        height: 100vh;
+        max-height: 100vh;
+        overflow: hidden;
+
+        @supports (height: 100dvh) {
+            height: 100dvh;
+            min-height: 100dvh;
+            max-height: 100dvh;
+        }
+    }
+
     .app.fullscreen {
         max-width: none;
         padding: 0;
+    }
+
+    .app.recording-layout {
+        box-sizing: border-box;
+        max-width: none;
+        overflow: hidden;
+        width: 100%;
+        min-width: 0;
+        padding: 0 .85rem;
+        height: 100vh;
+        min-height: 100vh;
+        max-height: 100vh;
+
+        @supports (height: 100dvh) {
+            height: 100dvh;
+            min-height: 100dvh;
+            max-height: 100dvh;
+        }
     }
 
     header, footer {
@@ -157,7 +197,22 @@
     }
 
     main {
-        flex: 1 0 0;
+        flex: 1 1 0;
+        min-height: 0;
+    }
+
+    .app:not(.fullscreen) main {
+        overflow-y: auto;
+    }
+
+    .app.recording-layout main {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 0;
+        min-height: 0;
+        min-width: 0;
+        max-height: 100%;
+        overflow: hidden;
     }
 
     header {
@@ -226,6 +281,10 @@
 
         header .main-nav {
             flex: 1 0 auto;
+        }
+
+        .app.recording-layout {
+            padding: 0 .5rem;
         }
     }
 

@@ -72,7 +72,9 @@
         margin-bottom: 0;
         white-space: break-spaces;
 
-        background: rgba(0, 0, 0, .5);
+        background: var(--bs-tertiary-bg);
+        border: 1px solid var(--bs-border-color);
+        box-shadow: none;
         border-radius: 3px;
         padding: 5px 10px;
 

@@ -1,6 +1,9 @@
 services:
   warpgate:
     image: ghcr.io/captain686/warpgate
+    # SQLite-backed quickstart. For external storage backends, see:
+    # - docker-compose.storage-mysql.yml
+    # - docker-compose.storage-postgres.yml
     ports:
       - 2222:2222
       - 8888:8888
